@@ -1,0 +1,99 @@
+# File: .github/workflows/build-all.yml
+name: Build All Devices
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        device: ["jdcloud_re-ss-01", "jdcloud_re-cs-02", "phicomm_k3"]
+        target: ["immortalwrt", "immortalwrt", "openwrt"]
+        profile: ["lite", "full", "lite", "full", "lite", "full"] # Adjust this as needed
+        config_file: [
+          "configs/ipq60xx.config",
+          "configs/ipq60xx.config",
+          "configs/k3-openwrt.config"
+        ]
+        # Note: This matrix assumes a simple pairing. You might need more complex logic
+        # or separate jobs for each combination if profiles don't map directly.
+        # For now, we'll assume:
+        # device: jdcloud_re-ss-01 -> target: immortalwrt -> profile: lite/full
+        # device: jdcloud_re-cs-02 -> target: immortalwrt -> profile: lite/full
+        # device: phicomm_k3 -> target: openwrt -> profile: lite/full
+        # This requires careful adjustment of the matrix or using a custom script to generate it.
+
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set Device and Target Environment Variables
+        run: |
+          echo "DEVICE_NAME=${{ matrix.device }}" >> $GITHUB_ENV
+          echo "BUILD_TARGET=${{ matrix.target }}" >> $GITHUB_ENV
+          echo "PROFILE_TYPE=${{ matrix.profile }}" >> $GITHUB_ENV
+          echo "CONFIG_FILE_PATH=${{ matrix.config_file }}" >> $GITHUB_ENV
+
+      # Determine source repo URL based on target
+      - name: Determine Source Repo URL
+        run: |
+          case "${{ matrix.target }}" in
+            "immortalwrt")
+              echo "REPO_URL=https://github.com/laipeng668/immortalwrt.git" >> $GITHUB_ENV
+              ;;
+            "openwrt")
+              echo "REPO_URL=https://github.com/laipeng668/openwrt.git" >> $GITHUB_ENV
+              ;;
+            "libwrt")
+              echo "REPO_URL=https://github.com/laipeng668/openwrt-6.x.git" >> $GITHUB_ENV
+              ;;
+            *)
+              echo "Unsupported target: ${{ matrix.target }}"
+              exit 1
+              ;;
+          esac
+
+      # Call Reusable Workflow with Parameters
+      - name: Build Firmware (Reusable Workflow)
+        uses: ./.github/workflows/build-firmware.yml
+        with:
+          device: ${{ matrix.device }}
+          branch: master # Or dynamically set from matrix if needed
+          target: ${{ matrix.target }}
+          profile: ${{ matrix.profile }}
+          config_file: ${{ matrix.config_file }}
+
+      # Optional: Upload artifacts for debugging
+      # - name: Upload Artifacts
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: build-${{ matrix.device }}-${{ matrix.target }}-${{ matrix.profile }}
+      #     path: |
+      #       openwrt/bin/targets/*/*/*.bin
+      #       openwrt/bin/targets/*/*/*.trx
+      #       openwrt/bin/targets/*/*/*.img
+      #       openwrt/bin/packages/*
+      #     if-no-files-found: ignore
+
+      # Optional: Create release (if successful)
+      # - name: Create Release
+      #   uses: softprops/action-gh-release@v1
+      #   if: success()
+      #   with:
+      #     tag_name: v${{ github.run_number }}
+      #     files: |
+      #       openwrt/bin/targets/*/*/*.bin
+      #       openwrt/bin/targets/*/*/*.trx
+      #       openwrt/bin/targets/*/*/*.img
+      #     body: |
+      #       Auto-generated firmware for ${{ matrix.device }} with ${{ matrix.target }} ${{ matrix.profile }} profile.
+      #       Build number: ${{ github.run_number }}
+      #       Commit: ${{ github.sha }}

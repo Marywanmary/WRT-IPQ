@@ -1,0 +1,110 @@
+# File: .github/workflows/build-firmware.yml
+name: Build Firmware for ${{ inputs.device }} (${{ inputs.target }})
+on:
+  workflow_call:
+    inputs:
+      device:
+        required: true
+        type: string
+      branch:
+        required: true
+        type: string
+      target:
+        required: true
+        type: string
+      profile:
+        required: true
+        type: string
+      config_file:
+        required: true
+        type: string
+
+jobs:
+  setup-and-build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check Disk Space (Monitor every 15 mins)
+        run: |
+          #!/bin/bash
+          echo "Checking disk space..."
+          df -h /tmp
+          SPACE=$(df /tmp | awk 'NR==2 {print $4}' | sed 's/[^0-9]*//g')
+          if [[ $SPACE -lt 10 ]]; then
+            echo "Warning: Low disk space ($SPACE GB). Build may fail."
+            echo "Low disk space warning" >> $GITHUB_STEP_SUMMARY
+          fi
+        # This is a simplified check. You can add a loop to check every 15 minutes if needed,
+        # but for most cases, a single check at the start should suffice unless build is very long.
+
+      - name: Setup Environment Variables
+        run: |
+          echo "DEVICE_NAME=${{ inputs.device }}" >> $GITHUB_ENV
+          echo "BUILD_TARGET=${{ inputs.target }}" >> $GITHUB_ENV
+          echo "PROFILE_TYPE=${{ inputs.profile }}" >> $GITHUB_ENV
+          echo "CONFIG_FILE_PATH=${{ inputs.config_file }}" >> $GITHUB_ENV
+
+      - name: Clone Source Code
+        run: |
+          git clone --depth 1 --branch "${{ inputs.branch }}" "${{ env.REPO_URL }}" openwrt
+          cd openwrt
+
+      - name: Prepare Configuration
+        run: |
+          cd openwrt
+          # Copy config file to .config
+          cp "${{ inputs.config_file }}" .config
+          # Apply any necessary modifications here if needed
+          # e.g., sed -i 's/old/new/g' .config
+
+      - name: Update Package Sources
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Build Firmware
+        run: |
+          cd openwrt
+          make -j$(nproc) V=s || {
+            echo "Build failed. See logs above." >&2
+            exit 1
+          }
+
+      - name: Check Build Success
+        run: |
+          cd openwrt
+          if ls bin/targets/*/*/*.bin bin/targets/*/*/*.trx 2>/dev/null; then
+            echo "Build successful"
+            echo "Build success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Build failed: No binary found"
+            echo "Build failed" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      - name: Package Artifacts
+        run: |
+          cd openwrt
+          # Find first available binary file
+          BINARY_FILE=$(find bin/targets -name "*.bin" -o -name "*.trx" | head -n 1)
+          if [ -n "$BINARY_FILE" ]; then
+            echo "Found binary: $BINARY_FILE"
+            # Get the filename without path
+            FILENAME=$(basename "$BINARY_FILE")
+            # Create a tar.gz for the binary
+            tar -czf "../${{ inputs.device }}_${{ inputs.target }}_${{ inputs.profile }}.tar.gz" "$FILENAME"
+            echo "Packaged artifact: ${{ inputs.device }}_${{ inputs.target }}_${{ inputs.profile }}.tar.gz"
+          else
+            echo "No binary file found for packaging"
+            exit 1
+          fi
+
+      - name: Upload to Release (if needed)
+        uses: actions/upload-release-asset@v1
+        with:
+          asset_path: "./${{ inputs.device }}_${{ inputs.target }}_${{ inputs.profile }}.tar.gz"
+          asset_name: "${{ inputs.device }}_${{ inputs.target }}_${{ inputs.profile }}.tar.gz"
+          content_type: application/gzip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        if: success() && github.event_name == 'push'

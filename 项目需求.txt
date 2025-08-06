@@ -1,0 +1,79 @@
+项目背景:
+用户有一台京东云雅典娜，一台京东云亚瑟，芯片IPQ60XX，架构是ARMv8，一台斐讯k3，芯片BCM4709，架构Cortex A9, 目前均使用openwrt，但是对软件包不满意，希望自己编译定制，但是用户毫无编程基础。
+使用Github Actions提供的ubuntu-22.04环境进行免费云编译固件。
+
+用户需求:为3台设备编译3个openwrt分支immortalwrt/openwrt/libwrt，前两个IPQ60XX要求包含NSS驱动，K3不需要。
+3个设备都有包含不同软件包和luci、中文化的Lite/Full版本，具体见config文件，而且有随时调整的需求。
+
+相关资源与信息如下：
+1.immortalwrt/openwrt/libwrt官方固件下载：
+京东云亚瑟---无
+京东云雅典娜---无
+斐讯k3---有immortalwrt/openwrt
+https://downloads.immortalwrt.org/releases/24.10.2/targets/bcm53xx/generic/immortalwrt-24.10.2-bcm53xx-generic-phicomm_k3-squashfs.trx
+https://downloads.openwrt.org/releases/24.10.2/targets/bcm53xx/generic/openwrt-24.10.2-bcm53xx-generic-phicomm_k3-squashfs.trx
+
+2.源代码（均已提供NSS驱动）：
+immortalwrt---https://github.com/laipeng668/immortalwrt.git 
+BRANCH: master
+openwrt---https://github.com/laipeng668/openwrt.git 
+BRANCH: master
+libwrt---https://github.com/laipeng668/openwrt-6.x.git
+BRANCH: k6.12-nss
+
+3.第三方软件源:
+https://github.com/kenzok8/small-package
+https://github.com/sirpdboy/luci-app-netspeedtest
+https://github.com/nikkinikki-org/OpenWrt-nikki
+https://github.com/sirpdboy/luci-app-partexp
+https://github.com/sbwml/luci-app-smbuser
+https://github.com/sirpdboy/luci-app-taskplan
+
+4.参考资料：其它Github用户编写的京东云雅典娜、京东云亚瑟、斐讯k3固件方案，可供参考。
+京东云亚瑟/京东云雅典娜
+工作流：
+https://github.com/laipeng668/openwrt-ci-roc/blob/master/.github/workflows/Arthur%26Athena-ImmortalWrt.yml
+https://github.com/laipeng668/openwrt-ci-roc/blob/master/.github/workflows/Arthur%26Athena-OpenWrt.yml
+https://github.com/laipeng668/openwrt-ci-roc/blob/master/.github/workflows/IPQ60XX-LibWrt.yml
+https://github.com/ZqinKing/wrt_release/blob/main/.github/workflows/release_wrt.yml
+
+配置文件：
+https://github.com/laipeng668/openwrt-ci-roc/blob/master/configs/Arthur%26Athena.config
+https://github.com/laipeng668/openwrt-ci-roc/blob/master/configs/General.config
+https://github.com/laipeng668/openwrt-ci-roc/blob/master/configs/IPQ60XX.config
+https://github.com/ZqinKing/wrt_release/blob/main/deconfig/jdcloud_ipq60xx_immwrt.config
+https://github.com/ZqinKing/wrt_release/blob/main/deconfig/jdcloud_ipq60xx_libwrt.config
+
+脚本：
+https://github.com/laipeng668/openwrt-ci-roc/blob/master/scripts/Roc-script.sh
+https://github.com/ZqinKing/wrt_release/blob/main/update.sh
+https://github.com/ZqinKing/wrt_release/blob/main/build.sh
+https://github.com/ZqinKing/wrt_release/blob/main/pre_clone_action.sh
+https://github.com/ZqinKing/wrt_release/tree/main/patches
+
+
+K3
+工作流：
+https://github.com/yangxu52/Phicomm-K3-OpenWrt-Firmware/blob/main/.github/workflows/K3-LEDE.yml
+https://github.com/JE668/Phicomm-K3-OpenWrt-Firmware-Lean/blob/main/.github/workflows/build-openwrt.yml
+
+配置文件：
+https://github.com/yangxu52/Phicomm-K3-OpenWrt-Firmware/blob/main/lede/.config
+https://github.com/JE668/Phicomm-K3-OpenWrt-Firmware-Lean/blob/main/.config
+
+脚本：
+https://github.com/yangxu52/Phicomm-K3-OpenWrt-Firmware/blob/main/lede/part1.sh
+https://github.com/yangxu52/Phicomm-K3-OpenWrt-Firmware/blob/main/lede/part2.sh
+https://github.com/JE668/Phicomm-K3-OpenWrt-Firmware-Lean/blob/main/diy-part1.sh
+https://github.com/JE668/Phicomm-K3-OpenWrt-Firmware-Lean/blob/main/diy-part2.sh
+
+项目重点难点：
+使用Github Actions提供的ubuntu-22.04环境进行免费云编译，编译空间和硬件相对偏小，要求高效编译，单次编译不能超github actions时限要求6小时，单次编译空间占用不能耗尽60g空间造成编译失败。
+
+详细要求：
+1.首先确定好项目架构，
+2.然后提供多种编译方案，分析优劣势并打分，
+3.采用评分最高的方案编写代码，
+4.代码要求借鉴参考资料中的优秀代码，
+5.代码要求具备以下功能：- name 字段后的英文后添加中文注释，用（）分隔；每15分钟监测硬盘空间，不足10g时预警；关键步骤添加错误检查与终止机制，并抓取错误日志在release中发布以便修改，
+6.代码完成后检查代码的正确性、健壮性、逻辑性、可维护性，然后自行测试运行9次，反馈结果，如有错误修正后重复6。

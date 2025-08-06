@@ -11,7 +11,7 @@ env:
   REPO_BRANCH: k6.12-nss
   CONFIG_FILE: configs/Arthur_Athena.config
   GENERAL_CONFIG_FILE: configs/General.config
-  DIY_SCRIPT: scripts/Roc-script.sh
+  DIY_SCRIPT: scripts/script.sh
   CLASH_KERNEL: amd64
   MADS: false
   UPLOAD_BIN_DIR: false
@@ -135,7 +135,36 @@ jobs:
       run: |
         cd $OPENWRT_PATH
         echo -e "$(nproc) thread compile"
+
+        # --- 立即执行第一次监控 ---
+        {
+          echo "## 🔄 编译期间系统占用监控 （频率 15分钟）"
+          echo "- 🕐 当前时间: $(date)"
+          echo "- 💾 磁盘使用率: $(df -h / | tail -1 | awk '{print \$5}')"
+          echo "- 📦 内存使用率: $(free | grep Mem | awk '{printf(\"%.1f%%\", \$3/\$2 * 100.0)}')"
+          echo "- ⚡ CPU负载: $(uptime | awk -F'load average:' '{print \$2}')"
+          echo ""
+        } >> "$MONITOR_LOG"
+
+        # --- 启动后台监控 (每15分钟一次) ---
+        (
+          while true; do
+            sleep 900 # 15分钟 = 900秒
+            {
+              echo "## 🔄 编译期间系统占用监控 （频率 15分钟）"
+              echo "- 🕐 当前时间: $(date)"
+              echo "- 💾 磁盘使用率: $(df -h / | tail -1 | awk '{print \$5}')"
+              echo "- 📦 内存使用率: $(free | grep Mem | awk '{printf(\"%.1f%%\", \$3/\$2 * 100.0)}')"
+              echo "- ⚡ CPU负载: $(uptime | awk -F'load average:' '{print \$2}')"
+              echo ""
+            } >> "$MONITOR_LOG"
+            echo "Monitor log updated at $(date)" >&2
+          done
+        ) & # 后台运行监控脚本
+
+        # 执行实际的编译命令
         make -j$(nproc) || make -j1 || make -j1 V=s
+
         echo "status=success" >> $GITHUB_OUTPUT
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV

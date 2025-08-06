@@ -16,7 +16,7 @@ env:
   MADS: false
   UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true
-  FIRMWARE_TAG: IPQ60XX
+  FIRMWARE_TAG: Arthur&Athena
   TZ: Asia/Shanghai
 
 jobs:

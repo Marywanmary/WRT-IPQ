@@ -136,27 +136,29 @@ jobs:
         cd $OPENWRT_PATH
         echo -e "$(nproc) thread compile"
         
-        # --- 立即执行第一次监控 ---
-        MONITOR_LOG="$GITHUB_WORKSPACE/compile_monitor.log"
-        {
-          echo "## 🔄 编译期间系统占用监控 （频率 15分钟）"
-          echo "- 🕐 当前时间: $(date)"
-          echo "- 💾 磁盘使用率: $(df -h / | tail -1 | awk '{print \$5}')"
-          echo "- 📦 内存使用率: $(free | grep Mem | awk '{printf(\"%.1f%%\", \$3/\$2 * 100.0)}')"
-          echo "- ⚡ CPU负载: $(uptime | awk -F'load average:' '{print \$2}')"
-          echo ""
-        } >> "$MONITOR_LOG"
+        # 创建监控日志文件
+        MONITOR_LOG="/tmp/compile_monitor.log"
+        touch "$MONITOR_LOG"
         
-        # --- 启动后台监控 (每15分钟一次) ---
+        # 后台运行监控脚本
         (
           while true; do
-            sleep 900 # 15分钟 = 900秒
+            sleep 900  # 每15分钟监控一次
+            echo "====================== 编译期间系统占用监控 ======================"
+            echo "🕒 监控时间: $(date)"
+            echo "💾 磁盘使用情况:"
+            df -hT | grep -E '^(Filesystem|/dev/)'
+            echo "📦 内存使用情况:"
+            free -h
+            echo "⚡ CPU 负载:"
+            uptime
+            echo "=========================================================="
             {
               echo "## 🔄 编译期间系统占用监控 （频率 15分钟）"
               echo "- 🕐 当前时间: $(date)"
-              echo "- 💾 磁盘使用率: $(df -h / | tail -1 | awk '{print \$5}')"
-              echo "- 📦 内存使用率: $(free | grep Mem | awk '{printf(\"%.1f%%\", \$3/\$2 * 100.0)}')"
-              echo "- ⚡ CPU负载: $(uptime | awk -F'load average:' '{print \$2}')"
+              echo "- 💾 磁盘使用率: $(df -h / | tail -1 | awk '{print $5}')"
+              echo "- 📦 内存使用率: $(free | grep Mem | awk '{printf("%.1f%%", $3/$2 * 100.0)}')"
+              echo "- ⚡ CPU负载: $(uptime | awk -F'load average:' '{print $2}')"
               echo ""
             } >> "$MONITOR_LOG"
             echo "Monitor log updated at $(date)" >&2
@@ -165,6 +167,9 @@ jobs:
         
         # 执行实际的编译命令
         make -j$(nproc) || make -j1 || make -j1 V=s
+        
+        # 停止监控进程
+        pkill -f "while true; do"
         
         # 检查编译是否成功
         if [ $? -eq 0 ]; then

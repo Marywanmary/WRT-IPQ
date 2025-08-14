@@ -87,28 +87,49 @@ jobs:
         echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
 
     - name: Generate Variables(生成区域变量并传递)
+      #env:
+        #CONFIGS_DIR: ${{ env.CONFIGS_DIR }}
+        #CONFIG_TARGET: ${{ env.CONFIG_TARGET }}
+        #CONFIG_TYPE: ${{ env.CONFIG_TYPE }}
       run: |
+        # 调试信息
+        #echo "当前工作目录: $(pwd)"
+        #echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+        #echo "CONFIGS_DIR: '$CONFIGS_DIR'"
+        #echo "CONFIG_TARGET: '$CONFIG_TARGET'"
+        #echo "CONFIG_TYPE: '$CONFIG_TYPE'"
+
         # 定义核心变量
-        # 定义DEVICE_TARGET 设备芯片
         echo "DEVICE_TARGET=$CONFIG_TARGET" >> $GITHUB_ENV
-        # 定义SOURCE_REPO 使用REPO_SHORT源码仓库简写
-        echo "SOURCE_REPO=$REPO_SHORT" >> $GITHUB_ENV
-        # 定义FIRMWARE_TAG Release标签=设备芯片&配置TYPE
-        echo "FIRMWARE_TAG=${CONFIG_TARGET}${CONFIG_TYPE}" >> $GITHUB_ENV
-        # 定义CONFIG_FILE 用户配置文件=配置目录/设备芯片&配置TYPE.config
+        echo "SOURCE_REPO=${{ env.REPO_SHORT }}" >> $GITHUB_ENV
+        echo "FIRMWARE_TAG=$CONFIG_TARGET$CONFIG_TYPE" >> $GITHUB_ENV
         echo "CONFIG_FILE=${CONFIGS_DIR}/${CONFIG_TARGET}${CONFIG_TYPE}.config" >> $GITHUB_ENV
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
-        
+    
         # 生成时间戳
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
-        
+    
         # 验证配置文件存在
         if [ ! -f "$CONFIG_FILE" ]; then
           echo "错误：配置文件 $CONFIG_FILE 不存在！"
+          echo "检查目录结构:"
+          echo "GITHUB_WORKSPACE 内容:"
+          ls -la $GITHUB_WORKSPACE
+          if [ -d "$GITHUB_WORKSPACE/$CONFIGS_DIR" ]; then
+            echo "$CONFIGS_DIR 目录内容:"
+            ls -la "$GITHUB_WORKSPACE/$CONFIGS_DIR"
+          else
+            echo "$CONFIGS_DIR 目录不存在!"
+          fi
           exit 1
         fi
-
+        
+        # 复制配置文件到源码目录（使用相对路径，因为当前在$GITHUB_WORKSPACE）
+        # cp $CONFIG_FILE $OPENWRT_PATH/.config
+        # cd $OPENWRT_PATH
+        # make defconfig > /dev/null 2>&1
+    
     - name: Cache Toolchain(缓存工具链)
       uses: actions/cache@main
       with:

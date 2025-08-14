@@ -16,6 +16,7 @@ env: # 定义全局变量
   CONFIG_TARGET: IPQ60XX
   CONFIG_TYPE: _Lite
   #CONFIG_TYPE: _Full
+  CONFIGS_DIR: configs
   # CONFIG_FILE: configs/IPQ60XX_Full.config
   # CONFIG_FILE: configs/IPQ60XX_Lite.config
   GENERAL_CONFIG_FILE: configs/General.config
@@ -88,24 +89,36 @@ jobs:
 
     - name: Generate Variables(生成区域变量并传递)
       run: |
+        # 定义核心变量
+        # 定义DEVICE_TARGET 设备芯片
+        echo "DEVICE_TARGET=$CONFIG_TARGET" >> $GITHUB_ENV
+        # 定义SOURCE_REPO 使用REPO_SHORT源码仓库简写
+        echo "SOURCE_REPO=$REPO_SHORT" >> $GITHUB_ENV
+        # 定义FIRMWARE_TAG Release标签=设备芯片&配置TYPE
+        echo "FIRMWARE_TAG=${CONFIG_TARGET}${CONFIG_TYPE}" >> $GITHUB_ENV
+        # 定义CONFIG_FILE 用户配置文件=配置目录/设备芯片&配置TYPE.config
+        echo "CONFIG_FILE=${CONFIGS_DIR}/${CONFIG_TARGET}${CONFIG_TYPE}.config" >> $GITHUB_ENV
+        echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
+        
+        # 生成时间戳
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+        
+        # 验证配置文件存在
+        if [ ! -f "$CONFIG_FILE" ]; then
+          echo "错误：配置文件 $CONFIG_FILE 不存在！"
+          exit 1
+        fi
+
         cp $CONFIG_FILE $OPENWRT_PATH/.config
         cd $OPENWRT_PATH
         make defconfig > /dev/null 2>&1
-        # 定义SOURCE_REPO 使用REPO_SHORT源码仓库简写
-        echo "SOURCE_REPO=$REPO_SHORT" >> $GITHUB_ENV
-        # 定义DEVICE_TARGET 设备芯片
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
-        # 定义CONFIG_FILE 用户配置文件=设备芯片&配置TYPE
-        echo "CONFIG_FILE=configs/$DEVICE_TARGET$CONFIG_TYPE.config" >> $GITHUB_ENV
-        # 定义FIRMWARE_TAG Release标签=设备芯片&配置TYPE
-        echo "FIRMWARE_TAG=$DEVICE_TARGET$CONFIG_TYPE" >> $GITHUB_ENV
-        echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
-        echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+
 
     - name: Cache Toolchain(缓存工具链)
       uses: actions/cache@main
       with:
-        key: ${{ env.SOURCE_REPO }}-${{ env.DEVICE_TARGET }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
+        key: ${{ env.SOURCE_REPO }}-${{ env.DEVICE_TARGET }}-${{ env.HASH }}
         restore-keys: ${{ env.SOURCE_REPO }}-${{ env.DEVICE_TARGET }}-
         path: |
           ${{ env.OPENWRT_PATH }}/.ccache
@@ -131,12 +144,15 @@ jobs:
         chmod +x $DIY_SCRIPT
         cd $OPENWRT_PATH
         $GITHUB_WORKSPACE/$DIY_SCRIPT
+        # 规范化配置文件（处理依赖关系和默认值）
+        make defconfig > /dev/null 2>&1
 
     - name: Download DL Package(下载DL软件包)
       run: |
         cd $OPENWRT_PATH
         make defconfig
         make download -j$(nproc)
+        # 清理无效下载文件
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
@@ -144,7 +160,7 @@ jobs:
       id: compile
       run: |
         cd $OPENWRT_PATH
-        echo -e "$(nproc) thread compile"
+        echo -e "使用$(nproc) 线程编译"
         make -j$(nproc) || make -j1 || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV

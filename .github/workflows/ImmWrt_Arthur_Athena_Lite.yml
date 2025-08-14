@@ -1,4 +1,4 @@
-name: ImmWrt_Arthur_Athena_$CONFIG_TYPE
+name: ${{ env.FIRMWARE_TAG }}
 
 on:
   workflow_dispatch:
@@ -69,7 +69,6 @@ jobs:
         sudo -E systemctl daemon-reload
         sudo -E apt-get -y autoremove --purge
         sudo -E apt-get -y clean
-        sudo timedatectl set-timezone "$TZ"
 
     - name: Checkout(检出代码)
       uses: actions/checkout@main
@@ -110,11 +109,6 @@ jobs:
           exit 1
         fi
 
-        cp $CONFIG_FILE $OPENWRT_PATH/.config
-        cd $OPENWRT_PATH
-        make defconfig > /dev/null 2>&1
-
-
     - name: Cache Toolchain(缓存工具链)
       uses: actions/cache@main
       with:
@@ -152,7 +146,7 @@ jobs:
         cd $OPENWRT_PATH
         make defconfig
         make download -j$(nproc)
-        # 清理无效下载文件
+        # 清理小于 1KB 的无效文件
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 

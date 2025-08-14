@@ -87,10 +87,10 @@ jobs:
         echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
 
     - name: Generate Variables(生成区域变量并传递)
-      #env:
-        #CONFIGS_DIR: ${{ env.CONFIGS_DIR }}
-        #CONFIG_TARGET: ${{ env.CONFIG_TARGET }}
-        #CONFIG_TYPE: ${{ env.CONFIG_TYPE }}
+      env:
+        CONFIGS_DIR: ${{ env.CONFIGS_DIR }}
+        CONFIG_TARGET: ${{ env.CONFIG_TARGET }}
+        CONFIG_TYPE: ${{ env.CONFIG_TYPE }}
       run: |
         # 调试信息
         #echo "当前工作目录: $(pwd)"

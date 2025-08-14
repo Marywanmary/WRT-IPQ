@@ -1,4 +1,4 @@
-name: ${{ env.FIRMWARE_TAG }}
+name: ImmWrt_Arthur_Athena_Lite
 
 on:
   workflow_dispatch:

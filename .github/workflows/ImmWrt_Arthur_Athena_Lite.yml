@@ -97,6 +97,8 @@ jobs:
         echo "CONFIG_FILE=$GITHUB_WORKSPACE/$CONFIGS_DIR/${CONFIG_TARGET}${CONFIG_TYPE}.config" >> $GITHUB_ENV
         echo "DIY_SCRIPT_PATH=$GITHUB_WORKSPACE/$DIY_SCRIPT" >> $GITHUB_ENV
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
+        # 规范化配置文件（处理依赖关系和默认值）
+        make defconfig > /dev/null 2>&1
     
     - name: Cache Toolchain(缓存工具链)
       uses: actions/cache@main
@@ -131,8 +133,6 @@ jobs:
         chmod +x $DIY_SCRIPT
         cd $SOURCE_PATH  # 切换到源代码目录
         $DIY_SCRIPT_PATH  # 执行位于GITHUB_WORKSPACE下的脚本
-        # 规范化配置文件（处理依赖关系和默认值）
-        make defconfig > /dev/null 2>&1
 
     - name: Download DL Package(下载DL软件包)
       run: |

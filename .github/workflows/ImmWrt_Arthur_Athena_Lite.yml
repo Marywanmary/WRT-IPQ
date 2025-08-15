@@ -88,11 +88,12 @@ jobs:
 
     - name: Generate Variables(生成变量)
       run: |
+        echo "CONFIG_FILE=$CONFIG_TARGET"_"$CONFIG_TYPE"" >> $GITHUB_ENV
         cp $CONFIG_FILE $OPENWRT_PATH/.config
         cd $OPENWRT_PATH
         make defconfig > /dev/null 2>&1
         echo "REPO_SHORT=$REPO_SHORT" >> $GITHUB_ENV
-        echo "FIRMWARE_TAG=$CONFIG_TARGET"_"$CONFIG_TYPE" >> $GITHUB_ENV
+        echo "FIRMWARE_TAG=$REPO_SHORT"_"$CONFIG_TARGET"_"$CONFIG_TYPE" >> $GITHUB_ENV
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
         echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
 

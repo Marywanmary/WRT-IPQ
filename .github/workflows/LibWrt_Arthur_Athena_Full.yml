@@ -1,4 +1,4 @@
-name: ImmWrt_Arthur_Athena_Full
+name: LibWrt_Arthur_Athena_Full
 
 on:
   workflow_dispatch:

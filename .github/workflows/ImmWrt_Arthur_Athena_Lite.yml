@@ -73,30 +73,30 @@ jobs:
     - name: Checkout(检出代码)
       uses: actions/checkout@main
 
-- name: Clone Source Code(克隆源代码)
-  run: |
-    df -hT $GITHUB_WORKSPACE
-    sudo mkdir -p /mnt/$REPO_SHORT
-    sudo chown -R $(id -u):$(id -g) /mnt/$REPO_SHORT
-    # 克隆源代码
-    git clone --depth 1 -b $REPO_BRANCH --single-branch $REPO_URL /mnt/$REPO_SHORT
-    cd /mnt/$REPO_SHORT
-    echo "SOURCE_PATH=$PWD" >> $GITHUB_ENV
-    VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
-    echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
-    # 修改内核版本获取方式，确保正确获取
-    if [ -f "target/linux/generic/kernel-6.12" ]; then
-      VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12 | head -1)
-      if [ -z "$VERSION_KERNEL" ]; then
+    - name: Clone Source Code(克隆源代码)
+      run: |
+        df -hT $GITHUB_WORKSPACE
+        sudo mkdir -p /mnt/$REPO_SHORT
+        sudo chown -R $(id -u):$(id -g) /mnt/$REPO_SHORT
+        # 克隆源代码
+        git clone --depth 1 -b $REPO_BRANCH --single-branch $REPO_URL /mnt/$REPO_SHORT
+        cd /mnt/$REPO_SHORT
+        echo "SOURCE_PATH=$PWD" >> $GITHUB_ENV
+        VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
+        echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
+        # 修改内核版本获取方式，确保正确获取
+        if [ -f "target/linux/generic/kernel-6.12" ]; then
+          VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12 | head -1)
+          if [ -z "$VERSION_KERNEL" ]; then
         echo "警告: 无法从文件中提取内核版本，尝试使用默认值"
         VERSION_KERNEL="6.12.40"
-      fi
-    else
-      echo "警告: kernel-6.12文件不存在，使用默认内核版本"
-      VERSION_KERNEL="6.12.40"
-    fi
-    echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
-    echo "获取到的内核版本: $VERSION_KERNEL"
+          fi
+        else
+          echo "警告: kernel-6.12文件不存在，使用默认内核版本"
+          VERSION_KERNEL="6.12.40"
+        fi
+        echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
+        echo "获取到的内核版本: $VERSION_KERNEL"
 
     - name: Generate Variables(生成区域变量并传递)
       run: |

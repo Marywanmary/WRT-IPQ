@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   workflow_call:
   schedule:
-    - cron: '0 16 * * 4'
+    - cron: 0 16 * * 4
 
 env: # 定义全局变量
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
@@ -14,14 +14,13 @@ env: # 定义全局变量
   # REPO_BRANCH: k6.12-nss
   # REPO_SHORT: LibWrt
   CONFIG_TARGET: IPQ60XX
-  CONFIG_TYPE: _Lite
-  # CONFIG_TYPE: _Full
+  CONFIG_TYPE: Lite
+  # CONFIG_TYPE: Full
   CONFIGS_DIR: configs
   # CONFIG_FILE: configs/IPQ60XX_Full.config
   # CONFIG_FILE: configs/IPQ60XX_Lite.config
   GENERAL_CONFIG_FILE: configs/General.config
   DIY_SCRIPT: scripts/Script.sh
-  # CLASH_KERNEL: amd64S
   MADS: false
   UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true
@@ -69,6 +68,7 @@ jobs:
         sudo -E systemctl daemon-reload
         sudo -E apt-get -y autoremove --purge
         sudo -E apt-get -y clean
+        sudo timedatectl set-timezone "$TZ"
 
     - name: Checkout(检出代码)
       uses: actions/checkout@main
@@ -78,86 +78,57 @@ jobs:
         df -hT $GITHUB_WORKSPACE
         sudo mkdir -p /mnt/$REPO_SHORT
         sudo chown -R $(id -u):$(id -g) /mnt/$REPO_SHORT
-        # 克隆源代码
         git clone --depth 1 -b $REPO_BRANCH --single-branch $REPO_URL /mnt/$REPO_SHORT
         cd /mnt/$REPO_SHORT
-        echo "SOURCE_PATH=$PWD" >> $GITHUB_ENV
+        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
         VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
         echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
-        # 修改内核版本获取方式，确保正确获取
-        if [ -f "target/linux/generic/kernel-6.12" ]; then
-          VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12 | head -1)
-          if [ -z "$VERSION_KERNEL" ]; then
-        echo "警告: 无法从文件中提取内核版本，尝试使用默认值"
-        VERSION_KERNEL="6.12.40"
-          fi
-        else
-          echo "警告: kernel-6.12文件不存在，使用默认内核版本"
-          VERSION_KERNEL="6.12.40"
-        fi
+        VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12)
         echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
-        echo "获取到的内核版本: $VERSION_KERNEL"
 
-    - name: Generate Variables(生成区域变量并传递)
+    - name: Generate Variables(生成变量)
       run: |
-        # 定义核心变量
-        echo "DEVICE_TARGET=$CONFIG_TARGET" >> $GITHUB_ENV
-        echo "SOURCE_REPO=${{ env.REPO_SHORT }}" >> $GITHUB_ENV
-        echo "FIRMWARE_TAG=$CONFIG_TARGET$CONFIG_TYPE" >> $GITHUB_ENV
-        # 直接使用GITHUB_WORKSPACE下的配置文件路径
-        echo "CONFIG_FILE=$GITHUB_WORKSPACE/$CONFIGS_DIR/${CONFIG_TARGET}${CONFIG_TYPE}.config" >> $GITHUB_ENV
-        echo "DIY_SCRIPT_PATH=$GITHUB_WORKSPACE/$DIY_SCRIPT" >> $GITHUB_ENV
+        cp $CONFIG_FILE $OPENWRT_PATH/.config
+        cd $OPENWRT_PATH
+        make defconfig > /dev/null 2>&1
+        echo "REPO_SHORT=$REPO_SHORT" >> $GITHUB_ENV
+        echo "FIRMWARE_TAG=$CONFIG_TARGET"_"$CONFIG_TYPE" >> $GITHUB_ENV
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
+        echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
 
     - name: Cache Toolchain(缓存工具链)
       uses: actions/cache@main
       with:
-        key: ${{ env.SOURCE_REPO }}-${{ env.DEVICE_TARGET }}-${{ env.HASH }}
-        restore-keys: ${{ env.SOURCE_REPO }}-${{ env.DEVICE_TARGET }}-
+        key: ${{ env.REPO_SHORT }}-${{ env.CONFIG_TARGET }}-${{ env.HASH }}
+        restore-keys: ${{ env.REPO_SHORT }}-${{ env.CONFIG_TARGET }}
         path: |
-          ${{ env.SOURCE_PATH }}/.ccache
-          ${{ env.SOURCE_PATH }}/staging_dir
+          ${{ env.OPENWRT_PATH }}/.ccache
+          ${{ env.OPENWRT_PATH }}/staging_dir
 
     - name: Refresh The Cache(刷新缓存)
       run: |
-        if [ -d "$SOURCE_PATH/staging_dir" ]; then
-          find "$SOURCE_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
+        if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+          find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
               find "$dir" -type f -exec touch {} +
           done
         fi
 
     - name: Install Feeds(安装feeds)
       run: |
-        cd $SOURCE_PATH
+        cd $OPENWRT_PATH
         ./scripts/feeds update -a
         ./scripts/feeds install -a
   
     - name: Load Custom Configuration(加载自定义配置)
       run: |
-        # 直接使用GITHUB_WORKSPACE下的配置文件和脚本，不进行复制
-        cat $GITHUB_WORKSPACE/$GENERAL_CONFIG_FILE $CONFIG_FILE > $SOURCE_PATH/.config
-        # echo "===== 合并后的配置文件内容 ====="
-        # cat $SOURCE_PATH/.config
-        # echo "===== 配置文件内容结束 ====="
+        cat $GENERAL_CONFIG_FILE $CONFIG_FILE > $OPENWRT_PATH/.config
         chmod +x $DIY_SCRIPT
-        cd $SOURCE_PATH  # 切换到源代码目录
-        # 创建内核版本文件
-        echo "创建内核版本文件..."
-        mkdir -p target/linux/generic
-        echo "$VERSION_KERNEL" > "target/linux/generic/kernel-$VERSION_KERNEL"
-        echo "创建内核版本文件结束..."
-            # 检查内核版本文件是否创建成功
-        if [ ! -f "target/linux/generic/kernel-$VERSION_KERNEL" ]; then
-          echo "错误: 无法创建内核版本文件"
-          exit 1
-        fi
-        $DIY_SCRIPT_PATH  # 执行位于GITHUB_WORKSPACE下的脚本
-        # 规范化配置文件（处理依赖关系和默认值）
-        make defconfig > /dev/null 2>&1
-    
+        cd $OPENWRT_PATH
+        $GITHUB_WORKSPACE/$DIY_SCRIPT
+
     - name: Download DL Package(下载DL软件包)
       run: |
-        cd $SOURCE_PATH
+        cd $OPENWRT_PATH
         make defconfig
         make download -j$(nproc)
         # 清理小于 1KB 的无效文件
@@ -167,7 +138,7 @@ jobs:
     - name: Compile Firmware(开始编译固件)
       id: compile
       run: |
-        cd $SOURCE_PATH
+        cd $OPENWRT_PATH
         echo -e "使用$(nproc) 线程编译"
         make -j$(nproc) || make -j1 || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
@@ -182,18 +153,18 @@ jobs:
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       uses: actions/upload-artifact@main
       with:
-        name: ${{ env.SOURCE_REPO }}-bin-${{ env.DEVICE_TARGET }}-${{ env.FILE_DATE }}
-        path: ${{ env.SOURCE_PATH }}/bin
+        name: ${{ env.REPO_SHORT }}-bin-${{ env.CONFIG_TARGET }}-${{ env.FILE_DATE }}
+        path: ${{ env.OPENWRT_PATH }}/bin
 
     - name: Organize Files(整理文件)
       if: steps.compile.outputs.status == 'success'
       run: |
-        cd $SOURCE_PATH/bin/targets/*/*
-        cp $SOURCE_PATH/.config ${{ env.FIRMWARE_TAG }}.config
+        cd $OPENWRT_PATH/bin/targets/*/*
+        cp $OPENWRT_PATH/.config ${{ env.FIRMWARE_TAG }}.config
         mv config.buildinfo ${{ env.FIRMWARE_TAG }}.buildinfo || true
         # 同时mv *.ipk 和 *.apk，保障代码健壮性,同时使用 || true 来忽略 mv 命令的错误 (例如文件不存在)
-        mv -f $SOURCE_PATH/bin/packages/*/*/*.ipk packages/ || true
-        mv -f $SOURCE_PATH/bin/packages/*/*/*.apk packages/ || true
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/ || true
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages/ || true
         tar -zcf ${{ env.FIRMWARE_TAG }}.Packages.tar.gz packages
         rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
@@ -202,7 +173,7 @@ jobs:
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
       uses: actions/upload-artifact@main
       with:
-        name: ${{ env.SOURCE_REPO }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.FILE_DATE }}
+        name: ${{ env.REPO_SHORT }}-firmware-${{ env.CONFIG_TARGET }}-${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE_PATH }}
 
     - name: Upload Firmware To Release(发布固件)
@@ -233,12 +204,12 @@ jobs:
     - name: Delete Old Cache(删除旧缓存)
       run: |
         # 获取缓存列表并删除
-        gh cache list --key ${{ env.SOURCE_REPO }}-${{ env.DEVICE_TARGET }}- --json key --jq '.[] | .key' | while read -r key; do
+        gh cache list --key ${{ env.REPO_SHORT }}-${{ env.CONFIG_TARGET }}- --json key --jq '.[] | .key' | while read -r key; do
           gh cache delete "$key"
         done
         # 输出缓存状态
         echo "========cache status========"
-        echo "ccache: $(du -sh $SOURCE_PATH/.ccache | cut -f 1)"
-        echo "staging: $(du -sh $SOURCE_PATH/staging_dir | cut -f 1)"
+        echo "ccache: $(du -sh $OPENWRT_PATH/.ccache | cut -f 1)"
+        echo "staging: $(du -sh $OPENWRT_PATH/staging_dir | cut -f 1)"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

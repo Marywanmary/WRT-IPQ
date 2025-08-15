@@ -125,6 +125,9 @@ jobs:
       run: |
         # 直接使用GITHUB_WORKSPACE下的配置文件和脚本，不进行复制
         cat $GITHUB_WORKSPACE/$GENERAL_CONFIG_FILE $CONFIG_FILE > $SOURCE_PATH/.config
+        echo "===== 合并后的配置文件内容 ====="
+        cat $SOURCE_PATH/.config
+        echo "===== 配置文件内容结束 ====="
         chmod +x $DIY_SCRIPT
         cd $SOURCE_PATH  # 切换到源代码目录
         $DIY_SCRIPT_PATH  # 执行位于GITHUB_WORKSPACE下的脚本

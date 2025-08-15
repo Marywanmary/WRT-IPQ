@@ -15,13 +15,13 @@ env: # 定义全局变量
   # REPO_SHORT: LibWrt
   CONFIG_TARGET: IPQ60XX
   CONFIG_TYPE: _Lite
-  #CONFIG_TYPE: _Full
+  # CONFIG_TYPE: _Full
   CONFIGS_DIR: configs
   # CONFIG_FILE: configs/IPQ60XX_Full.config
   # CONFIG_FILE: configs/IPQ60XX_Lite.config
   GENERAL_CONFIG_FILE: configs/General.config
   DIY_SCRIPT: scripts/Script.sh
-  #CLASH_KERNEL: amd64S
+  # CLASH_KERNEL: amd64S
   MADS: false
   UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true

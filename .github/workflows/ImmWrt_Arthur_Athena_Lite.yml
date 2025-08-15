@@ -156,11 +156,13 @@ jobs:
       if: steps.compile.outputs.status == 'success'
       run: |
         cd $OPENWRT_PATH/bin/targets/*/*
+        # 注意跟config配置一致
         cp $OPENWRT_PATH/.config IPQ60XX_Lite.config
         mv config.buildinfo Arthur.Athena.config.buildinfo
         # 同时mv *.ipk 和 *.apk，保障代码健壮性,同时使用 || true 来忽略 mv 命令的错误 (例如文件不存在)
         mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/ || true
         mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages/ || true
+        # 注意跟config配置一致
         tar -zcf IPQ60XX_Lite.Packages.tar.gz packages
         rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV

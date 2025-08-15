@@ -17,7 +17,7 @@ env:
   MADS: false
   UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true
-  FIRMWARE_TAG: IPQ60XX
+  FIRMWARE_TAG: IPQ60XX_Lite
   TZ: Asia/Shanghai
 
 jobs:
@@ -158,7 +158,7 @@ jobs:
         cd $OPENWRT_PATH/bin/targets/*/*
         # 注意跟config配置一致
         cp $OPENWRT_PATH/.config ImmWrt_IPQ60XX_Lite.config
-        mv config.buildinfo Arthur.Athena.config.buildinfo
+        mv config.buildinfo ImmWrt_IPQ60XX_Lite.config.buildinfo
         # 同时mv *.ipk 和 *.apk，保障代码健壮性,同时使用 || true 来忽略 mv 命令的错误 (例如文件不存在)
         mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/ || true
         mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages/ || true

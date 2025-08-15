@@ -134,6 +134,7 @@ jobs:
         echo "创建内核版本文件..."
         mkdir -p target/linux/generic
         echo "$VERSION_KERNEL" > "target/linux/generic/kernel-$VERSION_KERNEL"
+        echo "创建内核版本文件结束..."
             # 检查内核版本文件是否创建成功
         if [ ! -f "target/linux/generic/kernel-$VERSION_KERNEL" ]; then
           echo "错误: 无法创建内核版本文件"

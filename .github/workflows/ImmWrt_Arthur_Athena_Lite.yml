@@ -157,7 +157,7 @@ jobs:
       run: |
         cd $OPENWRT_PATH/bin/targets/*/*
         # 注意跟config配置一致
-        cp $OPENWRT_PATH/.config IPQ60XX_Lite.config
+        cp $OPENWRT_PATH/.config ImmWrt_IPQ60XX_Lite.config
         mv config.buildinfo Arthur.Athena.config.buildinfo
         # 同时mv *.ipk 和 *.apk，保障代码健壮性,同时使用 || true 来忽略 mv 命令的错误 (例如文件不存在)
         mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/ || true

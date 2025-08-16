@@ -1,4 +1,4 @@
-name: ImmWrt_Arthur_Athena_Lite
+name: ImmWrt_Arthur_Athena_Pro
 
 on:
   workflow_dispatch:
@@ -10,14 +10,16 @@ env:
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
   REPO_BRANCH: master
   # 需要Full/Lite固件的时候改成Full/Lite即可
-  CONFIG_FILE: configs/IPQ60XX_Lite.config
+  CONFIG_FILE: configs/IPQ60XX_Pro.config
+  #CONFIG_FILE: configs/IPQ60XX_Max.config
+  #CONFIG_FILE: configs/IPQ60XX_Ultra.config
   GENERAL_CONFIG_FILE: configs/General.config
   DIY_SCRIPT: scripts/Script.sh
   CLASH_KERNEL: amd64
   MADS: false
   UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true
-  FIRMWARE_TAG: IPQ60XX_Lite
+  FIRMWARE_TAG: IPQ60XX_Pro
   TZ: Asia/Shanghai
 
 jobs:
@@ -118,7 +120,7 @@ jobs:
   
     - name: Load Custom Configuration(加载自定义配置)
       run: |
-        cat $CONFIG_FILE $GENERAL_CONFIG_FILE > $OPENWRT_PATH/.config
+        cat $GENERAL_CONFIG_FILE $CONFIG_FILE > $OPENWRT_PATH/.config
         chmod +x $DIY_SCRIPT
         cd $OPENWRT_PATH
         $GITHUB_WORKSPACE/$DIY_SCRIPT
@@ -157,13 +159,13 @@ jobs:
       run: |
         cd $OPENWRT_PATH/bin/targets/*/*
         # 注意跟config配置一致
-        cp $OPENWRT_PATH/.config ImmWrt_IPQ60XX_Lite.config
-        mv config.buildinfo ImmWrt_IPQ60XX_Lite.config.buildinfo
+        cp $OPENWRT_PATH/.config ImmWrt_IPQ60XX_Pro.config
+        mv config.buildinfo ImmWrt_IPQ60XX_Pro.config.buildinfo
         # 同时mv *.ipk 和 *.apk，保障代码健壮性,同时使用 || true 来忽略 mv 命令的错误 (例如文件不存在)
         mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/ || true
         mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages/ || true
         # 注意跟config配置一致
-        tar -zcf IPQ60XX_Lite.Packages.tar.gz packages
+        tar -zcf IPQ60XX_Pro.Packages.tar.gz packages
         rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
 

@@ -1,5 +1,5 @@
 # 定义工作流的名称，这个名称会在GitHub Actions页面显示
-name: Matrix.Chatz
+name: ImmWrt Matrix Build
 
 # 定义工作流的触发条件
 on:
@@ -65,7 +65,7 @@ jobs:
       # 限制最大并行任务数为6，避免同时运行过多任务导致资源耗尽
       max-parallel: 6
       
-      # 排除某些不需要的组合（减少不必要的编译）
+      # 排除某些不需要的组合（减少不必要的编译）- 注意：exclude与matrix平级
       exclude:
         # 排除OpenWrt仓库的Ultra配置
         - repository: {short_name: "OpenWrt"}
@@ -533,9 +533,9 @@ jobs:
           - 💻 固件源码: ${{ env.REPO_URL }}
           - 💝 源码分支: ${{ env.REPO_BRANCH }}
           - 🌐 默认地址: **192.168.111.1**
-          - 🔑 默认密码: 无
+          - 🔑 默认密码: [请查看文档]
           - 🚀 WiFi名称: **Star**
-          - 🔑 WiFi密码: 12345678
+          - 🔑 WiFi密码: [请查看文档]
           ### 📒 固件版本
           - 固件内核版本：**${{ env.VERSION_KERNEL }}**
           - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录

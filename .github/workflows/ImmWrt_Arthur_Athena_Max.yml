@@ -9,7 +9,7 @@ on:
 env:
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
   REPO_BRANCH: master
-  # 需要Full/Lite固件的时候改成Full/Lite即可
+  # 需要不同固件的时候改成Ultra/Max/Ultra即可
   #CONFIG_FILE: configs/IPQ60XX_Pro.config
   CONFIG_FILE: configs/IPQ60XX_Max.config
   #CONFIG_FILE: configs/IPQ60XX_Ultra.config

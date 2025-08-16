@@ -1,5 +1,5 @@
 # 定义工作流的名称，这个名称会在GitHub Actions页面显示
-name: ImmWrt Matrix Build
+name: Matrix.Chatz
 
 # 定义工作流的触发条件
 on:
@@ -533,9 +533,9 @@ jobs:
           - 💻 固件源码: ${{ env.REPO_URL }}
           - 💝 源码分支: ${{ env.REPO_BRANCH }}
           - 🌐 默认地址: **192.168.111.1**
-          - 🔑 默认密码: [请查看文档]
+          - 🔑 默认密码: 无
           - 🚀 WiFi名称: **Star**
-          - 🔑 WiFi密码: [请查看文档]
+          - 🔑 WiFi密码: 12345678
           ### 📒 固件版本
           - 固件内核版本：**${{ env.VERSION_KERNEL }}**
           - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录

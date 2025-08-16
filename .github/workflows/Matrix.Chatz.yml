@@ -65,7 +65,7 @@ jobs:
       # 限制最大并行任务数为6，避免同时运行过多任务导致资源耗尽
       max-parallel: 6
       
-      # 排除某些不需要的组合（减少不必要的编译）- 注意：exclude与matrix平级
+      # 排除某些不需要的组合（减少不必要的编译）
       exclude:
         # 排除OpenWrt仓库的Ultra配置
         - repository: {short_name: "OpenWrt"}

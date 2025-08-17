@@ -86,10 +86,10 @@ jobs:
       CONFIG_TYPE: ${{ matrix.config_type }}
       # 从矩阵中获取设备型号
       DEVICE: ${{ matrix.device }}
-      # 固定的设备目标（芯片类型）
-      DEVICE_TARGET: ipq60xx
+      # 固定的设备目标（芯片类型）- 修改为大写以匹配实际文件名
+      DEVICE_TARGET: IPQ60XX
       # 根据配置类型动态生成配置文件路径
-      CONFIG_FILE: configs/ipq60xx_${{ matrix.config_type }}.config
+      CONFIG_FILE: configs/IPQ60XX_${{ matrix.config_type }}.config
 
     # 定义任务中的步骤（Step）
     steps:

@@ -1,5 +1,5 @@
 # 定义工作流的名称，这个名称会在GitHub Actions页面显示
-name: Matrix.Chatz
+name: Matrix.Chatz2
 
 # 定义工作流的触发条件
 on:

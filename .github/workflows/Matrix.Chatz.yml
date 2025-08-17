@@ -61,15 +61,6 @@ jobs:
         config_type: ["Pro", "Max", "Ultra"]
         # 定义两种不同的设备型号
         device: ["re-ss-01", "re-cs-02"]
-        
-        # 排除某些不需要的组合（减少不必要的编译）
-        exclude:
-          # 排除OpenWrt仓库的Ultra配置
-          - repository: {short_name: "OpenWrt"}
-            config_type: "Ultra"
-          # 排除LibWrt仓库的Pro配置
-          - repository: {short_name: "LibWrt"}
-            config_type: "Pro"
       
       # 限制最大并行任务数为6，避免同时运行过多任务导致资源耗尽
       max-parallel: 6
@@ -86,7 +77,7 @@ jobs:
       CONFIG_TYPE: ${{ matrix.config_type }}
       # 从矩阵中获取设备型号
       DEVICE: ${{ matrix.device }}
-      # 固定的设备目标（芯片类型）- 修改为大写以匹配实际文件名
+      # 固定的设备目标（芯片类型）
       DEVICE_TARGET: IPQ60XX
       # 根据配置类型动态生成配置文件路径
       CONFIG_FILE: configs/IPQ60XX_${{ matrix.config_type }}.config

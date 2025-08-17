@@ -1,5 +1,5 @@
 # 定义工作流的名称，这个名称会在GitHub Actions页面显示
-name: Matrix.Chatz2
+name: Matrix.Chatz
 
 # 定义工作流的触发条件
 on:
@@ -301,8 +301,15 @@ jobs:
         chmod +x "$GITHUB_WORKSPACE/$DIY_SCRIPT"
         # 进入源码目录
         cd "$OPENWRT_PATH"
-        # 执行自定义脚本（进行额外的配置修改）
-        "$GITHUB_WORKSPACE/$DIY_SCRIPT"
+        
+        # 检查自定义脚本是否存在
+        if [ -f "$GITHUB_WORKSPACE/$DIY_SCRIPT" ]; then
+          echo "执行自定义脚本..."
+          # 执行自定义脚本（进行额外的配置修改）
+          "$GITHUB_WORKSPACE/$DIY_SCRIPT"
+        else
+          echo "警告：自定义脚本不存在，跳过执行！"
+        fi
         
         # === 添加根据REPO_SHORT判断的NSS配置 ===
         echo "=== 添加NSS配置 ==="
@@ -310,10 +317,295 @@ jobs:
         echo "CONFIG_ATH11K_MEM_PROFILE_512M=y" >> "$OPENWRT_PATH/.config"
         
         # 根据REPO_SHORT添加不同的NSS固件版本配置
-        if [[ "$REPO_SHORT" == "ImmWrt" || "$REPO_SHORT" == "OpenWrt" ]]; then
-          echo "为 $REPO_SHORT 添加 NSS 固件版本 12.5 配置"
-          echo "CONFIG_NSS_FIRMWARE_VERSION_12_5=y" >> "$OPENWRT_PATH/.config"
-          # 确保移除可能存在的11.4配置
-          sed -i '/CONFIG_NSS_FIRMWARE_VERSION_11_4/d' "$OPENWRT_PATH/.config"
-        elif [[ "$REPO_SHORT" == "LibWrt" ]]; then
-          echo "为 $REPO_SHORT 添加 NSS 固件版本 11.4 
+        case "$REPO_SHORT" in
+          "ImmWrt"|"OpenWrt")
+            echo "为 $REPO_SHORT 添加 NSS 固件版本 12.5 配置"
+            echo "CONFIG_NSS_FIRMWARE_VERSION_12_5=y" >> "$OPENWRT_PATH/.config"
+            # 确保移除可能存在的11.4配置
+            sed -i '/CONFIG_NSS_FIRMWARE_VERSION_11_4/d' "$OPENWRT_PATH/.config"
+            ;;
+          "LibWrt")
+            echo "为 $REPO_SHORT 添加 NSS 固件版本 11.4 配置"
+            echo "CONFIG_NSS_FIRMWARE_VERSION_11_4=y" >> "$OPENWRT_PATH/.config"
+            # 确保移除可能存在的12.5配置
+            sed -i '/CONFIG_NSS_FIRMWARE_VERSION_12_5/d' "$OPENWRT_PATH/.config"
+            ;;
+          *)
+            echo "警告：未知的REPO_SHORT值 $REPO_SHORT，跳过NSS配置"
+            ;;
+        esac
+        
+        # 再次运行defconfig（处理新增的依赖关系）
+        make defconfig > /dev/null 2>&1
+        
+        # 显示最终配置中的NSS相关配置（用于调试）
+        echo "=== 最终NSS配置 ==="
+        grep -E "CONFIG_ATH11K_MEM_PROFILE_512M|CONFIG_NSS_FIRMWARE_VERSION" "$OPENWRT_PATH/.config" || echo "未找到NSS配置"
+
+    # 第十一步：下载DL软件包（下载编译所需的源码）
+    - name: Download DL Package(下载DL软件包)
+      # 运行Shell命令
+      run: |
+        # 设置错误处理
+        set -e
+        # 进入源码目录
+        cd "$OPENWRT_PATH"
+        # 运行defconfig（确保配置正确）
+        make defconfig
+        # 下载所有需要的软件包（使用多线程加速）
+        make download -j$(nproc)
+        # 查找并显示小于1024字节的文件（可能是下载失败的文件）
+        find dl -size -1024c -exec ls -l {} \;
+        # 删除这些小文件（清理无效下载）
+        find dl -size -1024c -exec rm -f {} \;
+
+    # 第十二步：编译固件（开始构建过程）
+    - name: Compile Firmware(开始编译固件)
+      # 为步骤指定ID（供后续步骤引用）
+      id: compile
+      # 运行Shell命令
+      run: |
+        # 设置错误处理
+        set -e
+        # 进入源码目录
+        cd "$OPENWRT_PATH"
+        # 显示编译线程数（根据CPU核心数确定）
+        echo "使用 $(nproc) 线程编译"
+        
+        # 尝试并行编译（使用所有CPU核心）
+        if ! make -j$(nproc); then
+          # 如果并行编译失败，尝试单线程编译（输出详细错误信息）
+          echo "并行编译失败，尝试单线程编译..."
+          if ! make -j1 V=s; then
+            # 如果单线程编译也失败，记录失败状态并退出
+            echo "编译失败！"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+        fi
+        
+        # 编译成功，记录成功状态
+        echo "编译成功！"
+        echo "status=success" >> $GITHUB_OUTPUT
+        # 更新时间戳
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+        
+        # 验证固件目录是否生成
+        if [ ! -d "bin/targets" ]; then
+          # 如果目录不存在，说明编译失败
+          echo "错误：未生成固件目录！"
+          echo "status=failed" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+    # 第十三步：监控资源使用情况（显示系统资源状态）
+    - name: Monitor Resources(监控资源使用)
+      # 无论上一步是否成功都执行
+      if: always()
+      # 运行Shell命令
+      run: |
+        # 显示内存使用情况
+        echo "=== 内存使用情况 ==="
+        free -h
+        # 显示磁盘使用情况
+        echo "=== 磁盘使用情况 ==="
+        df -h
+        # 显示CPU使用情况（显示前20行）
+        echo "=== CPU使用情况 ==="
+        top -bn1 | head -20
+
+    # 第十四步：检查磁盘空间使用情况
+    - name: Check Space Usage(检查空间使用情况)
+      # 如果任务没有被取消则执行
+      if: (!cancelled())
+      # 运行Shell命令
+      run: df -hT
+
+    # 第十五步：整理文件（重命名和打包固件）
+    - name: Organize Files(整理文件)
+      # 只有编译成功才执行
+      if: steps.compile.outputs.status == 'success'
+      # 运行Shell命令
+      run: |
+        # 设置错误处理
+        set -e
+        
+        # 进入固件输出目录（使用通配符匹配实际目录）
+        cd "$OPENWRT_PATH/bin/targets/*/*"
+        
+        # 复制配置文件到当前目录（使用固件标签命名）
+        cp "$OPENWRT_PATH/.config" "${FIRMWARE_TAG}.config"
+        # 重命名构建信息文件
+        mv config.buildinfo "${FIRMWARE_TAG}.buildinfo"
+        
+        # 创建packages目录
+        mkdir -p packages
+        # 移动所有.ipk文件到packages目录（忽略错误）
+        mv -f "$OPENWRT_PATH/bin/packages"*/*/*.ipk packages/ 2>/dev/null || true
+        # 移动所有.apk文件到packages目录（忽略错误）
+        mv -f "$OPENWRT_PATH/bin/packages"*/*/*.apk packages/ 2>/dev/null || true
+        # 将packages目录打包成tar.gz文件
+        tar -zcf "${FIRMWARE_TAG}.Packages.tar.gz" packages
+        # 删除不需要的文件
+        rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
+        
+        # 根据仓库类型确定固件前缀
+        case "$REPO_SHORT" in
+          "ImmWrt") FIRMWARE_PREFIX="immortalwrt" ;;  # ImmWrt使用immortalwrt前缀
+          "OpenWrt"|"LibWrt") FIRMWARE_PREFIX="openwrt" ;;  # 其他使用openwrt前缀
+          *) FIRMWARE_PREFIX="openwrt" ;;  # 默认使用openwrt前缀
+        esac
+        
+        # 查找并重命名固件文件
+        echo "查找固件文件..."
+        # 遍历匹配的固件文件
+        for file in "${FIRMWARE_PREFIX}"-qualcommax-ipq60xx-jdcloud_"${DEVICE}"-squashfs-*.bin; do
+          # 检查文件是否存在
+          if [ -f "$file" ]; then
+            echo "处理文件: $file"
+            # 如果是工厂固件
+            if [[ "$file" == *"factory.bin" ]]; then
+              # 生成新文件名
+              NEW_NAME="${REPO_SHORT}_${DEVICE}_${CONFIG_TYPE}-squashfs-factory.bin"
+              echo "重命名为: $NEW_NAME"
+              # 重命名文件
+              mv "$file" "$NEW_NAME"
+            # 如果是升级固件
+            elif [[ "$file" == *"sysupgrade.bin" ]]; then
+              # 生成新文件名
+              NEW_NAME="${REPO_SHORT}_${DEVICE}_${CONFIG_TYPE}-squashfs-sysupgrade.bin"
+              echo "重命名为: $NEW_NAME"
+              # 重命名文件
+              mv "$file" "$NEW_NAME"
+            fi
+          else
+            # 如果文件不存在，显示提示
+            echo "未找到匹配文件: $file"
+          fi
+        done
+        
+        # 验证重命名结果
+        echo "重命名后的文件:"
+        # 列出所有.bin文件（如果存在的话）
+        ls -la *.bin 2>/dev/null || echo "没有找到.bin文件"
+        
+        # 将当前目录路径保存到环境变量（供上传步骤使用）
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+
+    # 第十六步：显示调试信息（帮助排查问题）
+    - name: Debug Information(调试信息)
+      # 无论上一步是否成功都执行
+      if: always()
+      # 运行Shell命令
+      run: |
+        # 显示相关环境变量
+        echo "=== 环境变量 ==="
+        # 过滤显示与仓库、配置、设备相关的环境变量
+        env | grep -E "(REPO_|CONFIG_|DEVICE|FIRMWARE)" | sort
+        # 显示工作目录内容
+        echo "=== 工作目录内容 ==="
+        ls -la "$GITHUB_WORKSPACE"
+        # 显示源码目录内容（如果存在）
+        echo "=== 源码目录内容 ==="
+        ls -la "$OPENWRT_PATH" 2>/dev/null || echo "源码目录不存在"
+        # 验证配置文件
+        echo "=== 配置文件验证 ==="
+        # 检查配置文件是否存在
+        if [ -f "$CONFIG_FILE" ]; then
+          echo "配置文件存在: $CONFIG_FILE"
+          # 显示配置文件前10行
+          head -10 "$CONFIG_FILE"
+        else
+          echo "配置文件不存在: $CONFIG_FILE"
+        fi
+        # 显示最终配置中的NSS相关配置
+        echo "=== 最终NSS配置 ==="
+        if [ -f "$OPENWRT_PATH/.config" ]; then
+          grep -E "CONFIG_ATH11K_MEM_PROFILE_512M|CONFIG_NSS_FIRMWARE_VERSION" "$OPENWRT_PATH/.config" || echo "未找到NSS配置"
+        else
+          echo "最终配置文件不存在"
+        fi
+
+    # 第十七步：上传固件到Artifact（临时存储）
+    - name: Upload Firmware To Artifact(将固件上传到Artifact)
+      # 只有编译成功且不发布固件时才执行
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
+      # 使用官方的upload-artifact Action（升级到v4以解决弃用错误）
+      uses: actions/upload-artifact@v4
+      # 传递参数给Action
+      with:
+        # 定义Artifact名称（包含仓库、设备、配置等信息）
+        name: ${{ env.REPO_SHORT }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.CONFIG_TYPE }}-${{ env.DEVICE }}-${{ env.FILE_DATE }}
+        # 指定要上传的文件路径
+        path: ${{ env.FIRMWARE_PATH }}
+
+    # 第十八步：上传固件到Release（正式发布）
+    - name: Upload Firmware To Release(发布固件)
+      # 只有编译成功且启用发布时才执行
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
+      # 使用第三方Action创建Release
+      uses: ncipollo/release-action@v1
+      # 传递参数给Action
+      with:
+        # 定义Release名称（包含时间和固件标签）
+        name: ${{ env.DATE }}-${{ env.FIRMWARE_TAG }}
+        # 允许更新现有Release（如果已存在）
+        allowUpdates: true
+        # 定义Release标签（使用固件标签）
+        tag: ${{ env.FIRMWARE_TAG }}
+        # 使用GitHub Token进行认证
+        token: ${{ secrets.GITHUB_TOKEN }}
+        # 指定要上传的文件（所有文件）
+        artifacts: ${{ env.FIRMWARE_PATH }}/*
+        # 定义Release说明内容
+        body: |
+          **This is OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}**
+          ### 📒 固件信息
+          - 这是开启全功能NSS的6.12内核固件，默认主题为Argon；
+          - 该固件在${{ env.REPO_SHORT }}的基础上，添加了额外的软件包，并添加了若干工具，具体详见对应机型的config。
+          - 💻 固件源码: ${{ env.REPO_URL }}
+          - 💝 源码分支: ${{ env.REPO_BRANCH }}
+          - 🌐 默认地址: **192.168.111.1**
+          - 🔑 默认密码: 无
+          - 🚀 WiFi名称: **Star**
+          - 🔑 WiFi密码: 12345678
+          ### 📒 固件版本
+          - 固件内核版本：**${{ env.VERSION_KERNEL }}**
+          - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
+          - ${{ env.VERSION_INFO }}
+          ### 📒 NSS配置
+          - 内存配置: **CONFIG_ATH11K_MEM_PROFILE_512M=y**
+          - NSS固件版本: **${{ env.REPO_SHORT == 'LibWrt' && '11.4' || '12.5' }}**
+
+    # 第十九步：清理临时文件（释放磁盘空间）
+    - name: Clean Up(清理临时文件)
+      # 无论上一步是否成功都执行
+      if: always()
+      # 运行Shell命令
+      run: |
+        # 删除目标目录下的构建文件（释放磁盘空间）
+        sudo rm -rf /mnt/openwrt/build_dir/target-*
+        sudo rm -rf /mnt/openwrt/build_dir/host-*
+        # 提示清理完成
+        echo "清理完成"
+
+    # 第二十步：删除旧缓存（管理缓存空间）
+    - name: Delete Old Cache(删除旧缓存)
+      # 无论上一步是否成功都执行
+      if: always()
+      # 运行Shell命令
+      run: |
+        # 获取匹配的缓存列表并删除
+        gh cache list --key ${{ env.REPO_SHORT }}-${{ env.DEVICE_TARGET }}-${{ env.CONFIG_TYPE }}-${{ env.DEVICE }}- --json key --jq '.[] | .key' | while read -r key; do
+          gh cache delete "$key"
+        done
+        # 显示缓存状态
+        echo "========cache status========"
+        # 显示ccache缓存大小
+        echo "ccache: $(du -sh $OPENWRT_PATH/.ccache | cut -f 1)"
+        # 显示staging_dir缓存大小
+        echo "staging: $(du -sh $OPENWRT_PATH/staging_dir | cut -f 1)"
+      # 设置环境变量（提供GitHub Token）
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

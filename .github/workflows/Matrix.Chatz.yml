@@ -61,18 +61,18 @@ jobs:
         config_type: ["Pro", "Max", "Ultra"]
         # 定义两种不同的设备型号
         device: ["re-ss-01", "re-cs-02"]
+        
+        # 排除某些不需要的组合（减少不必要的编译）
+        exclude:
+          # 排除OpenWrt仓库的Ultra配置
+          - repository: {short_name: "OpenWrt"}
+            config_type: "Ultra"
+          # 排除LibWrt仓库的Pro配置
+          - repository: {short_name: "LibWrt"}
+            config_type: "Pro"
       
       # 限制最大并行任务数为6，避免同时运行过多任务导致资源耗尽
       max-parallel: 6
-      
-      # 排除某些不需要的组合（减少不必要的编译）
-      exclude:
-        # 排除OpenWrt仓库的Ultra配置
-        - repository: {short_name: "OpenWrt"}
-          config_type: "Ultra"
-        # 排除LibWrt仓库的Pro配置
-        - repository: {short_name: "LibWrt"}
-          config_type: "Pro"
     
     # 为每个矩阵组合定义环境变量
     env:

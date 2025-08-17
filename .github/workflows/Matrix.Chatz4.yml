@@ -116,6 +116,8 @@ jobs:
         echo "--------------------------硬盘信息--------------------------"
         # 显示硬盘数量（计算/dev/sd*开头的设备数量，排除分区）
         echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+      # 添加超时设置
+      timeout-minutes: 5
 
     # 第二步：最大化可用磁盘空间（如果MADS设置为true）
     - name: Maximize Available Disk Space(最大化可用磁盘空间​)
@@ -566,6 +568,21 @@ jobs:
           echo "status=failed" >> $GITHUB_OUTPUT
           exit 1
         fi
+        
+        # 检查固件目录内容
+        echo "固件目录内容："
+        find bin/targets -type f | head -20
+        
+        # 检查是否有生成的固件文件
+        FIRMWARE_COUNT=$(find bin/targets -name "*.bin" | wc -l)
+        echo "找到 $FIRMWARE_COUNT 个固件文件"
+        
+        if [ $FIRMWARE_COUNT -eq 0 ]; then
+          echo "警告：没有找到任何固件文件！"
+          # 列出bin目录下的所有文件，帮助调试
+          echo "bin目录内容："
+          find bin -type f | head -20
+        fi
       # 添加超时设置，使用环境变量中的超时时间
       timeout-minutes: ${{ env.COMPILE_TIMEOUT }}
 
@@ -605,10 +622,40 @@ jobs:
         # 设置错误处理：任何命令失败时立即退出
         set -e
         
-        # 进入固件输出目录（使用通配符匹配实际目录）
-        echo "进入固件输出目录..."
-        cd "$OPENWRT_PATH/bin/targets/*/*" || {
-          echo "错误：无法进入固件输出目录！"
+        # 首先检查固件输出目录是否存在
+        echo "检查固件输出目录..."
+        if [ ! -d "$OPENWRT_PATH/bin/targets" ]; then
+          echo "错误：固件输出目录不存在！"
+          exit 1
+        fi
+        
+        # 列出bin/targets目录内容
+        echo "bin/targets目录内容："
+        ls -la "$OPENWRT_PATH/bin/targets"
+        
+        # 查找实际的固件输出目录
+        TARGET_DIR=$(find "$OPENWRT_PATH/bin/targets" -type d -name "$DEVICE_TARGET" | head -1)
+        if [ -z "$TARGET_DIR" ]; then
+          echo "错误：找不到设备目标目录 $DEVICE_TARGET！"
+          echo "可用目标目录："
+          find "$OPENWRT_PATH/bin/targets" -type d | head -10
+          exit 1
+        fi
+        
+        # 查找子目录（通常包含设备型号）
+        SUB_DIR=$(find "$TARGET_DIR" -type d | grep -v "^$TARGET_DIR$" | head -1)
+        if [ -z "$SUB_DIR" ]; then
+          echo "错误：找不到设备型号子目录！"
+          echo "目标目录内容："
+          ls -la "$TARGET_DIR"
+          exit 1
+        fi
+        
+        echo "找到固件输出目录: $SUB_DIR"
+        
+        # 进入固件输出目录
+        cd "$SUB_DIR" || {
+          echo "错误：无法进入固件输出目录 $SUB_DIR！"
           exit 1
         }
         
@@ -621,9 +668,13 @@ jobs:
         
         # 重命名构建信息文件
         echo "重命名构建信息文件..."
-        if ! mv config.buildinfo "${FIRMWARE_TAG}.buildinfo"; then
-          echo "错误：重命名构建信息文件失败！"
-          exit 1
+        if [ -f "config.buildinfo" ]; then
+          if ! mv config.buildinfo "${FIRMWARE_TAG}.buildinfo"; then
+            echo "错误：重命名构建信息文件失败！"
+            exit 1
+          fi
+        else
+          echo "警告：config.buildinfo文件不存在"
         fi
         
         # 创建packages目录
@@ -631,22 +682,26 @@ jobs:
         
         # 移动所有.ipk文件到packages目录（忽略错误）
         echo "移动.ipk文件..."
-        mv -f "$OPENWRT_PATH/bin/packages"*/*/*.ipk packages/ 2>/dev/null || true
+        find "$OPENWRT_PATH/bin/packages" -name "*.ipk" -exec mv {} packages/ \; 2>/dev/null || true
         
         # 移动所有.apk文件到packages目录（忽略错误）
         echo "移动.apk文件..."
-        mv -f "$OPENWRT_PATH/bin/packages"*/*/*.apk packages/ 2>/dev/null || true
+        find "$OPENWRT_PATH/bin/packages" -name "*.apk" -exec mv {} packages/ \; 2>/dev/null || true
         
         # 将packages目录打包成tar.gz文件
         echo "打包packages目录..."
-        if ! tar -zcf "${FIRMWARE_TAG}.Packages.tar.gz" packages; then
-          echo "错误：打包packages目录失败！"
-          exit 1
+        if [ -d "packages" ] && [ "$(ls -A packages)" ]; then
+          if ! tar -zcf "${FIRMWARE_TAG}.Packages.tar.gz" packages; then
+            echo "错误：打包packages目录失败！"
+            exit 1
+          fi
+        else
+          echo "packages目录为空，跳过打包"
         fi
         
         # 删除不需要的文件
         echo "清理不需要的文件..."
-        rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
+        rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json 2>/dev/null || true
         
         # 根据仓库类型确定固件前缀
         case "$REPO_SHORT" in
@@ -658,36 +713,66 @@ jobs:
         # 查找并重命名固件文件
         echo "查找并重命名固件文件..."
         RENAME_COUNT=0
-        for file in "${FIRMWARE_PREFIX}"-qualcommax-ipq60xx-jdcloud_"${DEVICE}"-squashfs-*.bin; do
-          # 检查文件是否存在
-          if [ -f "$file" ]; then
-            echo "处理文件: $file"
-            # 如果是工厂固件
-            if [[ "$file" == *"factory.bin" ]]; then
-              # 生成新文件名
-              NEW_NAME="${REPO_SHORT}_${DEVICE}_${CONFIG_TYPE}-squashfs-factory.bin"
-              echo "重命名为: $NEW_NAME"
-              # 重命名文件
-              if ! mv "$file" "$NEW_NAME"; then
-                echo "错误：重命名文件失败！"
-                exit 1
+        
+        # 列出当前目录的所有.bin文件，帮助调试
+        echo "当前目录的.bin文件："
+        ls -la *.bin 2>/dev/null || echo "没有找到.bin文件"
+        
+        # 尝试多种可能的固件文件名模式
+        for pattern in \
+          "${FIRMWARE_PREFIX}"-qualcommax-ipq60xx-jdcloud_"${DEVICE}"-squashfs-*.bin \
+          "${FIRMWARE_PREFIX}"-qualcommax-ipq60xx-"${DEVICE}"-squashfs-*.bin \
+          "${FIRMWARE_PREFIX}"-ipq60xx-"${DEVICE}"-squashfs-*.bin \
+          "${FIRMWARE_PREFIX}"-"${DEVICE}"-squashfs-*.bin \
+          "${FIRMWARE_PREFIX}"-qualcommax-ipq60xx-jdcloud_"${DEVICE}"-*.bin \
+          "${FIRMWARE_PREFIX}"-qualcommax-ipq60xx-"${DEVICE}"-*.bin \
+          "${FIRMWARE_PREFIX}"-ipq60xx-"${DEVICE}"-*.bin \
+          "${FIRMWARE_PREFIX}"-"${DEVICE}"-*.bin \
+          *.bin
+        do
+          echo "尝试匹配模式: $pattern"
+          for file in $pattern; do
+            # 检查文件是否存在且是常规文件
+            if [ -f "$file" ]; then
+              echo "处理文件: $file"
+              # 如果是工厂固件
+              if [[ "$file" == *"factory.bin" ]]; then
+                # 生成新文件名
+                NEW_NAME="${REPO_SHORT}_${DEVICE}_${CONFIG_TYPE}-squashfs-factory.bin"
+                echo "重命名为: $NEW_NAME"
+                # 重命名文件
+                if ! mv "$file" "$NEW_NAME"; then
+                  echo "错误：重命名文件失败！"
+                  exit 1
+                fi
+                RENAME_COUNT=$((RENAME_COUNT+1))
+              # 如果是升级固件
+              elif [[ "$file" == *"sysupgrade.bin" ]]; then
+                # 生成新文件名
+                NEW_NAME="${REPO_SHORT}_${DEVICE}_${CONFIG_TYPE}-squashfs-sysupgrade.bin"
+                echo "重命名为: $NEW_NAME"
+                # 重命名文件
+                if ! mv "$file" "$NEW_NAME"; then
+                  echo "错误：重命名文件失败！"
+                  exit 1
+                fi
+                RENAME_COUNT=$((RENAME_COUNT+1))
+              # 如果是其他类型的.bin文件，也重命名
+              else
+                # 提取文件扩展名
+                EXTENSION="${file##*.}"
+                # 生成新文件名
+                NEW_NAME="${REPO_SHORT}_${DEVICE}_${CONFIG_TYPE}.${EXTENSION}"
+                echo "重命名为: $NEW_NAME"
+                # 重命名文件
+                if ! mv "$file" "$NEW_NAME"; then
+                  echo "错误：重命名文件失败！"
+                  exit 1
+                fi
+                RENAME_COUNT=$((RENAME_COUNT+1))
               fi
-              RENAME_COUNT=$((RENAME_COUNT+1))
-            # 如果是升级固件
-            elif [[ "$file" == *"sysupgrade.bin" ]]; then
-              # 生成新文件名
-              NEW_NAME="${REPO_SHORT}_${DEVICE}_${CONFIG_TYPE}-squashfs-sysupgrade.bin"
-              echo "重命名为: $NEW_NAME"
-              # 重命名文件
-              if ! mv "$file" "$NEW_NAME"; then
-                echo "错误：重命名文件失败！"
-                exit 1
-              fi
-              RENAME_COUNT=$((RENAME_COUNT+1))
             fi
-          else
-            echo "未找到匹配文件: $file"
-          fi
+          done
         done
         
         # 验证重命名结果
@@ -698,6 +783,9 @@ jobs:
         # 检查是否至少有一个文件被重命名
         if [ $RENAME_COUNT -eq 0 ]; then
           echo "错误：没有找到任何固件文件进行重命名！"
+          # 列出当前目录的所有文件，帮助调试
+          echo "当前目录的所有文件："
+          ls -la
           exit 1
         fi
         

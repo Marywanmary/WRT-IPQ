@@ -215,9 +215,53 @@ jobs:
         
         # 尝试多种可能的配置文件路径
         CONFIG_FILE=""
-        for prefix in "IPQ60XX" "ipq60xx"; do
-          for suffix in "${CONFIG_TYPE}" "${CONFIG_TYPE,,}" "${CONFIG_TYPE^^}"; do
-            possible_file="${CONFIGS_DIR}/${prefix}_${suffix}.config"
+        
+        # 根据仓库和配置类型确定配置文件
+        case "$REPO_SHORT" in
+          "LibWrt")
+            # 对于LibWrt，优先使用LibWrt.config
+            if [ -f "$CONFIGS_DIR/LibWrt.config" ]; then
+              CONFIG_FILE="$CONFIGS_DIR/LibWrt.config"
+              echo "使用LibWrt专用配置文件: $CONFIG_FILE"
+            else
+              echo "警告：LibWrt.config不存在，尝试其他配置文件"
+            fi
+            ;;
+        esac
+        
+        # 如果没有找到专用配置文件，尝试其他可能的配置文件
+        if [ -z "$CONFIG_FILE" ]; then
+          # 尝试直接使用配置类型作为文件名
+          possible_file="$CONFIGS_DIR/${CONFIG_TYPE}.config"
+          echo "检查配置文件: $possible_file"
+          if [ -f "$possible_file" ]; then
+            CONFIG_FILE="$possible_file"
+            echo "找到配置文件: $CONFIG_FILE"
+          fi
+        fi
+        
+        # 如果仍然没有找到，尝试设备目标+配置类型
+        if [ -z "$CONFIG_FILE" ]; then
+          for prefix in "IPQ60XX" "ipq60xx"; do
+            for suffix in "${CONFIG_TYPE}" "${CONFIG_TYPE,,}" "${CONFIG_TYPE^^}"; do
+              possible_file="${CONFIGS_DIR}/${prefix}_${suffix}.config"
+              echo "检查配置文件: $possible_file"
+              if [ -f "$possible_file" ]; then
+                CONFIG_FILE="$possible_file"
+                echo "找到配置文件: $CONFIG_FILE"
+                break
+              fi
+            done
+            if [ -n "$CONFIG_FILE" ]; then
+              break
+            fi
+          done
+        fi
+        
+        # 最后尝试使用设备目标配置文件
+        if [ -z "$CONFIG_FILE" ]; then
+          for prefix in "IPQ60XX" "ipq60xx"; do
+            possible_file="${CONFIGS_DIR}/${prefix}.config"
             echo "检查配置文件: $possible_file"
             if [ -f "$possible_file" ]; then
               CONFIG_FILE="$possible_file"
@@ -225,16 +269,14 @@ jobs:
               break
             fi
           done
-          if [ -n "$CONFIG_FILE" ]; then
-            break
-          fi
-        done
+        fi
         
         # 检查是否找到了配置文件
         if [ -z "$CONFIG_FILE" ]; then
           echo "错误：未找到任何匹配的配置文件！"
-          echo "尝试的配置类型: $CONFIG_TYPE"
-          echo "尝试的设备目标: $DEVICE_TARGET"
+          echo "仓库类型: $REPO_SHORT"
+          echo "配置类型: $CONFIG_TYPE"
+          echo "设备目标: $DEVICE_TARGET"
           echo "工作目录内容:"
           ls -la "$WORKSPACE_DIR"
           exit 1

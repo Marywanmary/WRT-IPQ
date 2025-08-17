@@ -79,7 +79,7 @@ jobs:
       DEVICE: ${{ matrix.device }}
       # 固定的设备目标（芯片类型）
       DEVICE_TARGET: ipq60xx
-      # 根据配置类型动态生成配置文件路径（修正：移除DEVICE_TARGET前缀）
+      # 根据配置类型动态生成配置文件路径（仅用于标识）
       CONFIG_FILE: configs/${{ matrix.config_type }}.config
 
     # 定义任务中的步骤（Step）
@@ -253,9 +253,9 @@ jobs:
         # 定义配置文件目录的绝对路径
         CONFIGS_DIR="$WORKSPACE_DIR/configs"
         
-        # 构建配置文件的完整路径（修正：移除DEVICE_TARGET前缀）
+        # 构建配置文件的完整路径（仅用于标识）
         CONFIG_FILE="${CONFIGS_DIR}/${CONFIG_TYPE}.config"
-        echo "配置文件路径: $CONFIG_FILE"
+        echo "配置文件标识: $CONFIG_FILE"
         
         # 检查配置文件是否存在
         if [ ! -f "$CONFIG_FILE" ]; then
@@ -271,6 +271,34 @@ jobs:
           exit 1
         fi
         
+        # 检查ipq60xx配置文件是否存在
+        IPQ60XX_CONFIG_FILE="${CONFIGS_DIR}/ipq60xx.config"
+        if [ ! -f "$IPQ60XX_CONFIG_FILE" ]; then
+          echo "错误：ipq60xx配置文件 $IPQ60XX_CONFIG_FILE 不存在！"
+          exit 1
+        fi
+        
+        # 检查Max配置文件是否存在（Max和Ultra需要）
+        MAX_CONFIG_FILE="${CONFIGS_DIR}/Max.config"
+        if [ ! -f "$MAX_CONFIG_FILE" ]; then
+          echo "错误：Max配置文件 $MAX_CONFIG_FILE 不存在！"
+          exit 1
+        fi
+        
+        # 检查Ultra配置文件是否存在（Ultra需要）
+        ULTRA_CONFIG_FILE="${CONFIGS_DIR}/Ultra.config"
+        if [ ! -f "$ULTRA_CONFIG_FILE" ]; then
+          echo "错误：Ultra配置文件 $ULTRA_CONFIG_FILE 不存在！"
+          exit 1
+        fi
+        
+        # 检查LibWrt配置文件是否存在（当REPO_SHORT为LibWrt时需要）
+        LIBWRT_CONFIG_FILE="${CONFIGS_DIR}/LibWrt.config"
+        if [ "$REPO_SHORT" = "LibWrt" ] && [ ! -f "$LIBWRT_CONFIG_FILE" ]; then
+          echo "错误：LibWrt配置文件 $LIBWRT_CONFIG_FILE 不存在！"
+          exit 1
+        fi
+        
         # 构建固件标签（用于发布和命名）
         FIRMWARE_TAG="${REPO_SHORT}_${DEVICE_TARGET}_${CONFIG_TYPE}_${DEVICE}"
         echo "固件标签: $FIRMWARE_TAG"
@@ -279,13 +307,6 @@ jobs:
         # 生成时间戳（用于文件名和日志）
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
-        
-        # 复制配置文件到源码目录（作为OpenWrt的配置）
-        echo "复制配置文件到源码目录..."
-        if ! cp "$CONFIG_FILE" "$OPENWRT_PATH/.config"; then
-          echo "错误：复制配置文件失败！"
-          exit 1
-        fi
         
         # 进入源码目录
         cd "$OPENWRT_PATH
@@ -367,15 +388,55 @@ jobs:
         # 设置错误处理：任何命令失败时立即退出
         set -e
         
-        # 合并通用配置文件和特定配置文件（生成完整的配置）
-        echo "合并配置文件..."
-        if ! cat "$GITHUB_WORKSPACE/$GENERAL_CONFIG_FILE" "$GITHUB_WORKSPACE/$CONFIG_FILE" > "$OPENWRT_PATH/.config"; then
-          echo "错误：合并配置文件失败！"
-          exit 1
+        # 定义工作空间目录的绝对路径
+        WORKSPACE_DIR="$GITHUB_WORKSPACE"
+        # 定义配置文件目录的绝对路径
+        CONFIGS_DIR="$WORKSPACE_DIR/configs"
+        
+        # 根据配置类型构建配置文件列表
+        CONFIG_FILES=("$WORKSPACE_DIR/$GENERAL_CONFIG_FILE" "$CONFIGS_DIR/ipq60xx.config")
+        
+        # 根据配置类型添加额外的配置文件
+        case "$CONFIG_TYPE" in
+          "Pro")
+            echo "Pro配置：添加基础配置文件"
+            ;;
+          "Max")
+            echo "Max配置：添加Max配置文件"
+            CONFIG_FILES+=("$CONFIGS_DIR/Max.config")
+            ;;
+          "Ultra")
+            echo "Ultra配置：添加Max和Ultra配置文件"
+            CONFIG_FILES+=("$CONFIGS_DIR/Max.config" "$CONFIGS_DIR/Ultra.config")
+            ;;
+        esac
+        
+        # 如果REPO_SHORT为LibWrt，添加LibWrt配置文件
+        if [ "$REPO_SHORT" = "LibWrt" ]; then
+          echo "LibWrt仓库：添加LibWrt配置文件"
+          CONFIG_FILES+=("$CONFIGS_DIR/LibWrt.config")
         fi
         
+        # 显示将要合并的配置文件列表
+        echo "将要合并的配置文件："
+        for file in "${CONFIG_FILES[@]}"; do
+          echo "  - $file"
+        done
+        
+        # 合并配置文件
+        echo "合并配置文件..."
+        for file in "${CONFIG_FILES[@]}"; do
+          if [ ! -f "$file" ]; then
+            echo "错误：配置文件 $file 不存在！"
+            exit 1
+          fi
+          echo "添加: $file"
+          cat "$file" >> "$OPENWRT_PATH/.config"
+          echo "" >> "$OPENWRT_PATH/.config"  # 添加空行分隔
+        done
+        
         # 给自定义脚本添加执行权限
-        if ! chmod +x "$GITHUB_WORKSPACE/$DIY_SCRIPT"; then
+        if ! chmod +x "$WORKSPACE_DIR/$DIY_SCRIPT"; then
           echo "错误：给DIY脚本添加执行权限失败！"
           exit 1
         fi
@@ -385,7 +446,7 @@ jobs:
         
         # 执行自定义脚本（进行额外的配置修改）
         echo "执行自定义DIY脚本..."
-        if ! "$GITHUB_WORKSPACE/$DIY_SCRIPT"; then
+        if ! "$WORKSPACE_DIR/$DIY_SCRIPT"; then
           echo "错误：执行DIY脚本失败！"
           exit 1
         fi
@@ -441,7 +502,7 @@ jobs:
         set -e
         
         # 进入源码目录
-        cd "$OPENWRT_PATH
+        cd "$OPENWRT_PATH"
         
         # 显示编译线程数（根据CPU核心数确定）
         THREADS=$(nproc)
@@ -708,11 +769,9 @@ jobs:
         
         # 获取匹配的缓存列表并删除
         echo "删除旧缓存..."
-        if ! gh cache list --key ${{ env.REPO_SHORT }}-${{ env.DEVICE_TARGET }}-${{ env.CONFIG_TYPE }}-${{ env.DEVICE }}- --json key --jq '.[] | .key' | while read -r key; do
+        gh cache list --key ${{ env.REPO_SHORT }}-${{ env.DEVICE_TARGET }}-${{ env.CONFIG_TYPE }}-${{ env.DEVICE }}- --json key --jq '.[] | .key' | while read -r key; do
           gh cache delete "$key"
-        done; then
-          echo "删除旧缓存失败，但继续执行"
-        fi
+        done || echo "删除旧缓存失败，但继续执行"
         
         # 输出缓存状态
         echo "========cache status========"

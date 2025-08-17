@@ -433,7 +433,7 @@ jobs:
         # 查找并重命名固件文件
         echo "查找固件文件..."
         # 遍历匹配的固件文件
-        for file in "${FIRMWARE_PREFIX}-qualcommax-ipq60xx-jdcloud_${DEVICE}-squashfs-*.bin; do
+        for file in "${FIRMWARE_PREFIX}"-qualcommax-ipq60xx-jdcloud_"${DEVICE}"-squashfs-*.bin; do
           # 检查文件是否存在
           if [ -f "$file" ]; then
             echo "处理文件: $file"
@@ -497,8 +497,8 @@ jobs:
     - name: Upload Firmware To Artifact(将固件上传到Artifact)
       # 只有编译成功且不发布固件时才执行
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
-      # 使用官方的upload-artifact Action
-      uses: actions/upload-artifact@v3
+      # 使用官方的upload-artifact Action（升级到v4以解决弃用错误）
+      uses: actions/upload-artifact@v4
       # 传递参数给Action
       with:
         # 定义Artifact名称（包含仓库、设备、配置等信息）

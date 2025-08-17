@@ -6,6 +6,8 @@ on:
   schedule:
     - cron: 0 16 * * 4
 
+run-name: ${{ matrix.repo_short }}-${{ matrix.config_type }} Build (${{ github.event_name }})
+
 env:
   TZ: Asia/Shanghai
 
@@ -201,8 +203,12 @@ jobs:
           device=$(echo "$file" | grep -oP 're-(ss-01|cs-02)')
           if [ -n "$device" ]; then
             # 构建新文件名
-            prefix="${{ matrix.repo_short }}-${{ matrix.config_type }}"
-            new_name="${prefix}_${device}-$(echo "$file" | cut -d'-' -f5-)"
+            # 格式: REPO_SHORT_device-remaining_parts-CONFIG_TYPE.bin
+            prefix="${{ matrix.repo_short }}_${device}"
+            # 移除原始前缀并保留剩余部分
+            remaining=$(echo "$file" | sed 's/.*re-(ss-01\|cs-02)-//')
+            # 添加配置类型到文件名末尾（.bin前）
+            new_name="${prefix}-${remaining%.bin}-${{ matrix.config_type }}.bin"
             mv "$file" "$new_name"
           fi
         done

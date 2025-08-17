@@ -205,6 +205,22 @@ jobs:
         # 显示当前工作目录的磁盘使用情况
         df -hT "$GITHUB_WORKSPACE"
         
+        # 检查并清理目标目录
+        echo "检查目标目录..."
+        if [ -d "/mnt/openwrt" ]; then
+          echo "目标目录已存在，检查是否为空..."
+          if [ "$(ls -A /mnt/openwrt)" ]; then
+            echo "目标目录不为空，正在清理..."
+            sudo rm -rf /mnt/openwrt || {
+              echo "错误：无法删除现有目录！"
+              exit 1
+            }
+            echo "目标目录已清理"
+          else
+            echo "目标目录为空，直接使用"
+          fi
+        fi
+        
         # 创建/mnt/openwrt目录（用于存放源码）
         echo "创建源码目录..."
         if ! sudo mkdir -p /mnt/openwrt; then

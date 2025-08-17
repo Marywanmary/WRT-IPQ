@@ -79,8 +79,8 @@ jobs:
       DEVICE: ${{ matrix.device }}
       # 固定的设备目标（芯片类型）
       DEVICE_TARGET: ipq60xx
-      # 根据配置类型动态生成配置文件路径
-      CONFIG_FILE: configs/ipq60xx_${{ matrix.config_type }}.config
+      # 根据配置类型动态生成配置文件路径（修正：移除DEVICE_TARGET前缀）
+      CONFIG_FILE: configs/${{ matrix.config_type }}.config
 
     # 定义任务中的步骤（Step）
     steps:
@@ -253,8 +253,8 @@ jobs:
         # 定义配置文件目录的绝对路径
         CONFIGS_DIR="$WORKSPACE_DIR/configs"
         
-        # 构建配置文件的完整路径
-        CONFIG_FILE="${CONFIGS_DIR}/${DEVICE_TARGET}_${CONFIG_TYPE}.config"
+        # 构建配置文件的完整路径（修正：移除DEVICE_TARGET前缀）
+        CONFIG_FILE="${CONFIGS_DIR}/${CONFIG_TYPE}.config"
         echo "配置文件路径: $CONFIG_FILE"
         
         # 检查配置文件是否存在
@@ -441,7 +441,7 @@ jobs:
         set -e
         
         # 进入源码目录
-        cd "$OPENWRT_PATH"
+        cd "$OPENWRT_PATH
         
         # 显示编译线程数（根据CPU核心数确定）
         THREADS=$(nproc)

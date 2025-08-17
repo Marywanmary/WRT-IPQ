@@ -1,6 +1,9 @@
 # 定义工作流的名称，这个名称会在GitHub Actions页面显示
 name: Matrix.Chatz4
 
+# 定义工作流运行名称，显示在Actions运行列表中
+run-name: ${{ github.workflow }} by ${{ github.actor }} - ${{ github.event_name == 'schedule' && 'Scheduled build' || github.event_name == 'workflow_dispatch' && 'Manual build' || github.event_name == 'workflow_call' && 'Called build' }} (${{ github.run_number }})
+
 # 定义工作流的触发条件
 on:
   # 允许手动触发工作流
@@ -25,6 +28,8 @@ env:
   FIRMWARE_RELEASE: true
   # 设置时区为亚洲上海
   TZ: Asia/Shanghai
+  # 设置编译超时时间（分钟）
+  COMPILE_TIMEOUT: 360
 
 # 定义工作流中的任务（Job）
 jobs:
@@ -64,6 +69,8 @@ jobs:
       
       # 限制最大并行任务数为6，避免同时运行过多任务导致资源耗尽
       max-parallel: 6
+      # 矩阵失败时不取消其他任务，允许所有任务尝试完成
+      fail-fast: false
     
     # 为每个矩阵组合定义环境变量
     env:
@@ -78,9 +85,9 @@ jobs:
       # 从矩阵中获取设备型号
       DEVICE: ${{ matrix.device }}
       # 固定的设备目标（芯片类型）
-      DEVICE_TARGET: IPQ60XX
-      # 根据配置类型动态生成配置文件路径
-      CONFIG_FILE: configs/IPQ60XX_${{ matrix.config_type }}.config
+      DEVICE_TARGET: ipq60xx
+      # 根据配置类型动态生成配置文件路径（仅用于标识）
+      CONFIG_FILE: configs/${{ matrix.config_type }}.config
 
     # 定义任务中的步骤（Step）
     steps:
@@ -134,6 +141,8 @@ jobs:
         remove-cached-tools: "true"
         # 删除交换文件（虚拟内存）
         remove-swapfile: "true"
+      # 添加超时设置，防止此步骤运行时间过长
+      timeout-minutes: 10
 
     # 第三步：初始化环境（安装必要的软件包）
     - name: Initialization Environment(初始化环境)
@@ -142,56 +151,110 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       # 运行Shell命令
       run: |
+        # 设置错误处理：任何命令失败时立即退出
+        set -e
+        
         # 更新软件包列表（获取最新的软件包信息）
-        sudo -E apt-get -y update
+        echo "更新软件包列表..."
+        if ! sudo -E apt-get -y update; then
+          echo "错误：更新软件包列表失败！"
+          exit 1
+        fi
+        
         # 安装编译OpenWrt所需的依赖软件包（从网络获取依赖列表）
-        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
+        echo "安装依赖软件包..."
+        if ! DEPS=$(curl -fsSL is.gd/depends_ubuntu_2204); then
+          echo "错误：获取依赖列表失败！"
+          exit 1
+        fi
+        
+        if ! sudo -E apt-get -y install $DEPS; then
+          echo "错误：安装依赖软件包失败！"
+          exit 1
+        fi
+        
         # 重新加载systemd管理器配置
         sudo -E systemctl daemon-reload
+        
         # 自动删除不需要的软件包（清理依赖）
         sudo -E apt-get -y autoremove --purge
+        
         # 清理apt缓存（释放磁盘空间）
         sudo -E apt-get -y clean
-        # 设置系统时区为亚洲上海
-        sudo timedatectl set-timezone "$TZ"
+        
+        echo "环境初始化完成！"
+      # 添加超时设置
+      timeout-minutes: 30
 
     # 第四步：检出代码（下载仓库中的文件）
     - name: Checkout(检出代码)
-      # 使用官方的checkout Action下载代码
-      uses: actions/checkout@v3
+      # 使用官方的checkout Action下载代码，更新到v4版本
+      uses: actions/checkout@v4
+      # 添加超时设置
+      timeout-minutes: 5
 
     # 第五步：克隆源代码（下载OpenWrt源码）
     - name: Clone Source Code(克隆源代码)
       # 运行Shell命令
       run: |
+        # 设置错误处理：任何命令失败时立即退出
+        set -e
+        
         # 显示当前工作目录的磁盘使用情况
         df -hT "$GITHUB_WORKSPACE"
+        
         # 创建/mnt/openwrt目录（用于存放源码）
-        sudo mkdir -p /mnt/openwrt
+        echo "创建源码目录..."
+        if ! sudo mkdir -p /mnt/openwrt; then
+          echo "错误：创建源码目录失败！"
+          exit 1
+        fi
+        
         # 修改/mnt/openwrt目录的所有者为当前用户（避免权限问题）
-        sudo chown -R $(id -u):$(id -g) /mnt/openwrt
+        if ! sudo chown -R $(id -u):$(id -g) /mnt/openwrt; then
+          echo "错误：修改目录权限失败！"
+          exit 1
+        fi
+        
         # 克隆指定仓库的指定分支（--depth 1表示只克隆最新版本，减少下载量）
-        git clone --depth 1 -b "$REPO_BRANCH" --single-branch "$REPO_URL" /mnt/openwrt
+        echo "克隆源码仓库: $REPO_URL"
+        if ! git clone --depth 1 -b "$REPO_BRANCH" --single-branch "$REPO_URL" /mnt/openwrt; then
+          echo "错误：克隆源码仓库失败！"
+          exit 1
+        fi
+        
         # 进入源码目录
         cd /mnt/openwrt
+        
         # 将源码目录路径保存到环境变量（供后续步骤使用）
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+        
         # 获取最后一次提交的版本信息（格式化为HTML格式）
-        VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
-        # 将版本信息保存到环境变量
+        echo "获取版本信息..."
+        if ! VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H"); then
+          echo "警告：获取版本信息失败，使用默认值"
+          VERSION_INFO="未知"
+        fi
         echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
         
         # 尝试从标准路径提取内核版本
+        echo "提取内核版本..."
         KERNEL_VERSION_FILE="target/linux/generic/kernel-6.12"
+        VERSION_KERNEL="未知"
+        
         if [ -f "$KERNEL_VERSION_FILE" ]; then
           # 如果文件存在，从中提取内核版本号
-          VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' "$KERNEL_VERSION_FILE" || echo "未知")
+          VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' "$KERNEL_VERSION_FILE" 2>/dev/null || echo "未知")
         else
           # 如果文件不存在，尝试从其他路径查找内核版本
-          VERSION_KERNEL=$(find . -name "kernel-*" -type f -exec grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' {} \; | head -1 || echo "未知")
+          echo "标准路径不存在，尝试其他路径..."
+          VERSION_KERNEL=$(find . -name "kernel-*" -type f -exec grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' {} \; 2>/dev/null | head -1 || echo "未知")
         fi
-        # 将内核版本保存到环境变量
+        
+        echo "内核版本: $VERSION_KERNEL"
         echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
+      # 添加超时设置
+      timeout-minutes: 30
 
     # 第六步：生成变量（创建工作流需要的各种变量）
     - name: Generate Variables(生成区域变量并传递)
@@ -205,80 +268,15 @@ jobs:
         # 定义配置文件目录的绝对路径
         CONFIGS_DIR="$WORKSPACE_DIR/configs"
         
-        # 显示可用的配置文件列表（用于调试）
-        echo "=== 可用配置文件列表 ==="
-        if [ -d "$CONFIGS_DIR" ]; then
-          ls -la "$CONFIGS_DIR"
-        else
-          echo "配置目录不存在: $CONFIGS_DIR"
-        fi
+        # 构建配置文件的完整路径（仅用于标识）
+        CONFIG_FILE="${CONFIGS_DIR}/${CONFIG_TYPE}.config"
+        echo "配置文件标识: $CONFIG_FILE"
         
-        # 尝试多种可能的配置文件路径
-        CONFIG_FILE=""
-        
-        # 根据仓库和配置类型确定配置文件
-        case "$REPO_SHORT" in
-          "LibWrt")
-            # 对于LibWrt，优先使用LibWrt.config
-            if [ -f "$CONFIGS_DIR/LibWrt.config" ]; then
-              CONFIG_FILE="$CONFIGS_DIR/LibWrt.config"
-              echo "使用LibWrt专用配置文件: $CONFIG_FILE"
-            else
-              echo "警告：LibWrt.config不存在，尝试其他配置文件"
-            fi
-            ;;
-        esac
-        
-        # 如果没有找到专用配置文件，尝试其他可能的配置文件
-        if [ -z "$CONFIG_FILE" ]; then
-          # 尝试直接使用配置类型作为文件名
-          possible_file="$CONFIGS_DIR/${CONFIG_TYPE}.config"
-          echo "检查配置文件: $possible_file"
-          if [ -f "$possible_file" ]; then
-            CONFIG_FILE="$possible_file"
-            echo "找到配置文件: $CONFIG_FILE"
-          fi
-        fi
-        
-        # 如果仍然没有找到，尝试设备目标+配置类型
-        if [ -z "$CONFIG_FILE" ]; then
-          for prefix in "IPQ60XX" "ipq60xx"; do
-            for suffix in "${CONFIG_TYPE}" "${CONFIG_TYPE,,}" "${CONFIG_TYPE^^}"; do
-              possible_file="${CONFIGS_DIR}/${prefix}_${suffix}.config"
-              echo "检查配置文件: $possible_file"
-              if [ -f "$possible_file" ]; then
-                CONFIG_FILE="$possible_file"
-                echo "找到配置文件: $CONFIG_FILE"
-                break
-              fi
-            done
-            if [ -n "$CONFIG_FILE" ]; then
-              break
-            fi
-          done
-        fi
-        
-        # 最后尝试使用设备目标配置文件
-        if [ -z "$CONFIG_FILE" ]; then
-          for prefix in "IPQ60XX" "ipq60xx"; do
-            possible_file="${CONFIGS_DIR}/${prefix}.config"
-            echo "检查配置文件: $possible_file"
-            if [ -f "$possible_file" ]; then
-              CONFIG_FILE="$possible_file"
-              echo "找到配置文件: $CONFIG_FILE"
-              break
-            fi
-          done
-        fi
-        
-        # 检查是否找到了配置文件
-        if [ -z "$CONFIG_FILE" ]; then
-          echo "错误：未找到任何匹配的配置文件！"
-          echo "仓库类型: $REPO_SHORT"
-          echo "配置类型: $CONFIG_TYPE"
-          echo "设备目标: $DEVICE_TARGET"
-          echo "工作目录内容:"
-          ls -la "$WORKSPACE_DIR"
+        # 检查配置文件是否存在
+        if [ ! -f "$CONFIG_FILE" ]; then
+          echo "错误：配置文件 $CONFIG_FILE 不存在！"
+          echo "可用配置文件:"
+          ls -la "$CONFIGS_DIR/" || echo "配置目录不存在"
           exit 1
         fi
         
@@ -288,27 +286,59 @@ jobs:
           exit 1
         fi
         
+        # 检查ipq60xx配置文件是否存在
+        IPQ60XX_CONFIG_FILE="${CONFIGS_DIR}/ipq60xx.config"
+        if [ ! -f "$IPQ60XX_CONFIG_FILE" ]; then
+          echo "错误：ipq60xx配置文件 $IPQ60XX_CONFIG_FILE 不存在！"
+          exit 1
+        fi
+        
+        # 检查Max配置文件是否存在（Max和Ultra需要）
+        MAX_CONFIG_FILE="${CONFIGS_DIR}/Max.config"
+        if [ ! -f "$MAX_CONFIG_FILE" ]; then
+          echo "错误：Max配置文件 $MAX_CONFIG_FILE 不存在！"
+          exit 1
+        fi
+        
+        # 检查Ultra配置文件是否存在（Ultra需要）
+        ULTRA_CONFIG_FILE="${CONFIGS_DIR}/Ultra.config"
+        if [ ! -f "$ULTRA_CONFIG_FILE" ]; then
+          echo "错误：Ultra配置文件 $ULTRA_CONFIG_FILE 不存在！"
+          exit 1
+        fi
+        
+        # 检查LibWrt配置文件是否存在（当REPO_SHORT为LibWrt时需要）
+        LIBWRT_CONFIG_FILE="${CONFIGS_DIR}/LibWrt.config"
+        if [ "$REPO_SHORT" = "LibWrt" ] && [ ! -f "$LIBWRT_CONFIG_FILE" ]; then
+          echo "错误：LibWrt配置文件 $LIBWRT_CONFIG_FILE 不存在！"
+          exit 1
+        fi
+        
         # 构建固件标签（用于发布和命名）
         FIRMWARE_TAG="${REPO_SHORT}_${DEVICE_TARGET}_${CONFIG_TYPE}_${DEVICE}"
-        # 将固件标签保存到环境变量
+        echo "固件标签: $FIRMWARE_TAG"
         echo "FIRMWARE_TAG=$FIRMWARE_TAG" >> $GITHUB_ENV
         
-        # 生成当前时间戳（用于文件名和日志）
+        # 生成时间戳（用于文件名和日志）
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        # 生成文件日期戳（用于文件名和日志）
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
         
-        # 复制配置文件到源码目录（作为OpenWrt的配置）
-        cp "$CONFIG_FILE" "$OPENWRT_PATH/.config"
         # 进入源码目录
         cd "$OPENWRT_PATH"
+        
         # 运行defconfig命令（处理配置文件中的依赖关系）
-        make defconfig > /dev/null 2>&1
+        echo "运行defconfig处理依赖关系..."
+        if ! make defconfig > /dev/null 2>&1; then
+          echo "错误：defconfig执行失败！"
+          exit 1
+        fi
+      # 添加超时设置
+      timeout-minutes: 5
 
     # 第七步：缓存工具链（加速编译）
     - name: Cache Toolchain(缓存工具链)
-      # 使用官方的cache Action
-      uses: actions/cache@v3
+      # 使用官方的cache Action，更新到v4版本
+      uses: actions/cache@v4
       # 传递参数给Action
       with:
         # 定义缓存键（唯一标识缓存内容）
@@ -321,104 +351,177 @@ jobs:
         path: |
           ${{ env.OPENWRT_PATH }}/.ccache  # ccache缓存目录
           ${{ env.OPENWRT_PATH }}/staging_dir  # 工具链目录
+      # 添加超时设置
+      timeout-minutes: 5
 
     # 第八步：刷新缓存（更新缓存时间戳）
     - name: Refresh The Cache(刷新缓存)
       # 运行Shell命令
       run: |
-        # 设置错误处理
+        # 设置错误处理：任何命令失败时立即退出
         set -e
+        
         # 检查工具链目录是否存在
         if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+          echo "刷新缓存时间戳..."
           # 查找所有名为"stamp"的目录（排除target目录）
           find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
               # 更新这些目录下所有文件的时间戳（避免缓存过期）
               find "$dir" -type f -exec touch {} +
           done
+          echo "缓存刷新完成！"
+        else
+          echo "工具链目录不存在，跳过缓存刷新"
         fi
+      # 添加超时设置
+      timeout-minutes: 5
 
     # 第九步：安装Feeds（更新和安装软件包列表）
     - name: Install Feeds(安装feeds)
       # 运行Shell命令
       run: |
-        # 设置错误处理
+        # 设置错误处理：任何命令失败时立即退出
         set -e
+        
         # 进入源码目录
         cd "$OPENWRT_PATH"
+        
         # 更新所有feeds（获取最新的软件包列表）
-        ./scripts/feeds update -a
+        echo "更新feeds列表..."
+        if ! ./scripts/feeds update -a; then
+          echo "错误：更新feeds失败！"
+          exit 1
+        fi
+        
         # 安装所有feeds（下载软件包到本地）
-        ./scripts/feeds install -a
+        echo "安装feeds..."
+        if ! ./scripts/feeds install -a; then
+          echo "错误：安装feeds失败！"
+          exit 1
+        fi
+        
+        echo "Feeds安装完成！"
+      # 添加超时设置
+      timeout-minutes: 30
   
     # 第十步：加载自定义配置（合并配置文件）
     - name: Load Custom Configuration(加载自定义配置)
       # 运行Shell命令
       run: |
-        # 设置错误处理
+        # 设置错误处理：任何命令失败时立即退出
         set -e
-        # 合并通用配置文件和特定配置文件（生成完整的配置）
-        cat "$GITHUB_WORKSPACE/$GENERAL_CONFIG_FILE" "$GITHUB_WORKSPACE/$CONFIG_FILE" > "$OPENWRT_PATH/.config"
-        # 给自定义脚本添加执行权限
-        chmod +x "$GITHUB_WORKSPACE/$DIY_SCRIPT"
-        # 进入源码目录
-        cd "$OPENWRT_PATH"
         
-        # 检查自定义脚本是否存在
-        if [ -f "$GITHUB_WORKSPACE/$DIY_SCRIPT" ]; then
-          echo "执行自定义脚本..."
-          # 执行自定义脚本（进行额外的配置修改）
-          "$GITHUB_WORKSPACE/$DIY_SCRIPT"
-        else
-          echo "警告：自定义脚本不存在，跳过执行！"
-        fi
+        # 定义工作空间目录的绝对路径
+        WORKSPACE_DIR="$GITHUB_WORKSPACE"
+        # 定义配置文件目录的绝对路径
+        CONFIGS_DIR="$WORKSPACE_DIR/configs"
         
-        # === 添加根据REPO_SHORT判断的NSS配置 ===
-        echo "=== 添加NSS配置 ==="
-        # 添加公共配置
-        echo "CONFIG_ATH11K_MEM_PROFILE_512M=y" >> "$OPENWRT_PATH/.config"
+        # 根据配置类型构建配置文件列表
+        CONFIG_FILES=("$WORKSPACE_DIR/$GENERAL_CONFIG_FILE" "$CONFIGS_DIR/ipq60xx.config")
         
-        # 根据REPO_SHORT添加不同的NSS固件版本配置
-        case "$REPO_SHORT" in
-          "ImmWrt"|"OpenWrt")
-            echo "为 $REPO_SHORT 添加 NSS 固件版本 12.5 配置"
-            echo "CONFIG_NSS_FIRMWARE_VERSION_12_5=y" >> "$OPENWRT_PATH/.config"
-            # 确保移除可能存在的11.4配置
-            sed -i '/CONFIG_NSS_FIRMWARE_VERSION_11_4/d' "$OPENWRT_PATH/.config"
+        # 根据配置类型添加额外的配置文件
+        case "$CONFIG_TYPE" in
+          "Pro")
+            echo "Pro配置：添加基础配置文件"
             ;;
-          "LibWrt")
-            echo "为 $REPO_SHORT 添加 NSS 固件版本 11.4 配置"
-            echo "CONFIG_NSS_FIRMWARE_VERSION_11_4=y" >> "$OPENWRT_PATH/.config"
-            # 确保移除可能存在的12.5配置
-            sed -i '/CONFIG_NSS_FIRMWARE_VERSION_12_5/d' "$OPENWRT_PATH/.config"
+          "Max")
+            echo "Max配置：添加Max配置文件"
+            CONFIG_FILES+=("$CONFIGS_DIR/Max.config")
             ;;
-          *)
-            echo "警告：未知的REPO_SHORT值 $REPO_SHORT，跳过NSS配置"
+          "Ultra")
+            echo "Ultra配置：添加Max和Ultra配置文件"
+            CONFIG_FILES+=("$CONFIGS_DIR/Max.config" "$CONFIGS_DIR/Ultra.config")
             ;;
         esac
         
-        # 再次运行defconfig（处理新增的依赖关系）
-        make defconfig > /dev/null 2>&1
+        # 如果REPO_SHORT为LibWrt，添加LibWrt配置文件
+        if [ "$REPO_SHORT" = "LibWrt" ]; then
+          echo "LibWrt仓库：添加LibWrt配置文件"
+          CONFIG_FILES+=("$CONFIGS_DIR/LibWrt.config")
+        fi
         
-        # 显示最终配置中的NSS相关配置（用于调试）
-        echo "=== 最终NSS配置 ==="
-        grep -E "CONFIG_ATH11K_MEM_PROFILE_512M|CONFIG_NSS_FIRMWARE_VERSION" "$OPENWRT_PATH/.config" || echo "未找到NSS配置"
+        # 显示将要合并的配置文件列表
+        echo "将要合并的配置文件："
+        for file in "${CONFIG_FILES[@]}"; do
+          echo "  - $file"
+        done
+        
+        # 合并配置文件
+        echo "合并配置文件..."
+        # 首先清空目标配置文件
+        echo "" > "$OPENWRT_PATH/.config"
+        
+        # 逐个添加配置文件内容
+        for file in "${CONFIG_FILES[@]}"; do
+          if [ ! -f "$file" ]; then
+            echo "错误：配置文件 $file 不存在！"
+            exit 1
+          fi
+          echo "添加: $file"
+          cat "$file" >> "$OPENWRT_PATH/.config"
+          echo "" >> "$OPENWRT_PATH/.config"  # 添加空行分隔
+        done
+        
+        # 给自定义脚本添加执行权限
+        if ! chmod +x "$WORKSPACE_DIR/$DIY_SCRIPT"; then
+          echo "错误：给DIY脚本添加执行权限失败！"
+          exit 1
+        fi
+        
+        # 进入源码目录
+        cd "$OPENWRT_PATH"
+        
+        # 执行自定义脚本（进行额外的配置修改）
+        echo "执行自定义DIY脚本..."
+        if ! "$WORKSPACE_DIR/$DIY_SCRIPT"; then
+          echo "错误：执行DIY脚本失败！"
+          exit 1
+        fi
+        
+        # 再次运行defconfig（处理新增的依赖关系）
+        echo "运行defconfig处理新增依赖..."
+        if ! make defconfig > /dev/null 2>&1; then
+          echo "错误：defconfig执行失败！"
+          exit 1
+        fi
+      # 添加超时设置
+      timeout-minutes: 10
 
     # 第十一步：下载DL软件包（下载编译所需的源码）
     - name: Download DL Package(下载DL软件包)
       # 运行Shell命令
       run: |
-        # 设置错误处理
+        # 设置错误处理：任何命令失败时立即退出
         set -e
+        
         # 进入源码目录
         cd "$OPENWRT_PATH"
+        
         # 运行defconfig（确保配置正确）
-        make defconfig
+        echo "运行defconfig确保配置正确..."
+        if ! make defconfig; then
+          echo "错误：defconfig执行失败！"
+          exit 1
+        fi
+        
         # 下载所有需要的软件包（使用多线程加速）
-        make download -j$(nproc)
+        echo "下载软件包..."
+        if ! make download -j$(nproc); then
+          echo "错误：下载软件包失败！"
+          exit 1
+        fi
+        
         # 查找并显示小于1024字节的文件（可能是下载失败的文件）
+        echo "检查下载失败的文件..."
         find dl -size -1024c -exec ls -l {} \;
+        
         # 删除这些小文件（清理无效下载）
+        echo "清理无效下载文件..."
         find dl -size -1024c -exec rm -f {} \;
+        
+        echo "软件包下载完成！"
+      # 添加超时设置
+      timeout-minutes: 60
 
     # 第十二步：编译固件（开始构建过程）
     - name: Compile Firmware(开始编译固件)
@@ -426,19 +529,23 @@ jobs:
       id: compile
       # 运行Shell命令
       run: |
-        # 设置错误处理
+        # 设置错误处理：任何命令失败时立即退出
         set -e
+        
         # 进入源码目录
         cd "$OPENWRT_PATH"
+        
         # 显示编译线程数（根据CPU核心数确定）
-        echo "使用 $(nproc) 线程编译"
+        THREADS=$(nproc)
+        echo "使用 $THREADS 线程编译"
         
         # 尝试并行编译（使用所有CPU核心）
-        if ! make -j$(nproc); then
-          # 如果并行编译失败，尝试单线程编译（输出详细错误信息）
+        echo "开始并行编译..."
+        if ! make -j$THREADS; then
           echo "并行编译失败，尝试单线程编译..."
+          
+          # 如果并行编译失败，尝试单线程编译（输出详细错误信息）
           if ! make -j1 V=s; then
-            # 如果单线程编译也失败，记录失败状态并退出
             echo "编译失败！"
             echo "status=failed" >> $GITHUB_OUTPUT
             exit 1
@@ -448,17 +555,19 @@ jobs:
         # 编译成功，记录成功状态
         echo "编译成功！"
         echo "status=success" >> $GITHUB_OUTPUT
+        
         # 更新时间戳
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
         
         # 验证固件目录是否生成
         if [ ! -d "bin/targets" ]; then
-          # 如果目录不存在，说明编译失败
           echo "错误：未生成固件目录！"
           echo "status=failed" >> $GITHUB_OUTPUT
           exit 1
         fi
+      # 添加超时设置，使用环境变量中的超时时间
+      timeout-minutes: ${{ env.COMPILE_TIMEOUT }}
 
     # 第十三步：监控资源使用情况（显示系统资源状态）
     - name: Monitor Resources(监控资源使用)
@@ -475,6 +584,8 @@ jobs:
         # 显示CPU使用情况（显示前20行）
         echo "=== CPU使用情况 ==="
         top -bn1 | head -20
+      # 添加超时设置
+      timeout-minutes: 5
 
     # 第十四步：检查磁盘空间使用情况
     - name: Check Space Usage(检查空间使用情况)
@@ -482,6 +593,8 @@ jobs:
       if: (!cancelled())
       # 运行Shell命令
       run: df -hT
+      # 添加超时设置
+      timeout-minutes: 5
 
     # 第十五步：整理文件（重命名和打包固件）
     - name: Organize Files(整理文件)
@@ -489,93 +602,51 @@ jobs:
       if: steps.compile.outputs.status == 'success'
       # 运行Shell命令
       run: |
-        # 设置错误处理
+        # 设置错误处理：任何命令失败时立即退出
         set -e
         
-        # 查找固件输出目录
-        echo "查找固件输出目录..."
-        FIRMWARE_DIR=""
-        
-        # 首先尝试查找精确的目录路径
-        if [ -d "$OPENWRT_PATH/bin/targets/$DEVICE_TARGET" ]; then
-          # 查找子目录
-          for subdir in "$OPENWRT_PATH/bin/targets/$DEVICE_TARGET"/*; do
-            if [ -d "$subdir" ] && [ "$(ls -A "$subdir" 2>/dev/null)" ]; then
-              FIRMWARE_DIR="$subdir"
-              echo "找到固件目录: $FIRMWARE_DIR"
-              break
-            fi
-          done
-        fi
-        
-        # 如果没有找到，尝试其他路径
-        if [ -z "$FIRMWARE_DIR" ]; then
-          echo "尝试查找其他可能的目录..."
-          # 使用find命令查找包含.bin文件的目录
-          FIRMWARE_DIR=$(find "$OPENWRT_PATH/bin/targets" -type d -exec test -f "{}/"*.bin \; -print -quit 2>/dev/null)
-          
-          if [ -n "$FIRMWARE_DIR" ] && [ -d "$FIRMWARE_DIR" ]; then
-            echo "找到固件目录: $FIRMWARE_DIR"
-          else
-            # 最后尝试通配符路径
-            for path in "$OPENWRT_PATH/bin/targets/*/*" "$OPENWRT_PATH/bin/targets/*"; do
-              # 使用ls检查是否有匹配的目录
-              MATCHING_DIRS=$(ls -d $path 2>/dev/null | head -1)
-              if [ -n "$MATCHING_DIRS" ] && [ -d "$MATCHING_DIRS" ] && [ "$(ls -A "$MATCHING_DIRS" 2>/dev/null)" ]; then
-                FIRMWARE_DIR="$MATCHING_DIRS"
-                echo "找到固件目录: $FIRMWARE_DIR"
-                break
-              fi
-            done
-          fi
-        fi
-        
-        # 如果没有找到固件目录，则跳过整理文件步骤
-        if [ -z "$FIRMWARE_DIR" ]; then
-          echo "警告：未找到固件输出目录，跳过整理文件步骤！"
-          echo "bin目录内容:"
-          ls -la "$OPENWRT_PATH/bin" 2>/dev/null || echo "bin目录不存在"
-          echo "targets目录内容:"
-          if [ -d "$OPENWRT_PATH/bin/targets" ]; then
-            ls -la "$OPENWRT_PATH/bin/targets" 2>/dev/null
-            echo "targets子目录:"
-            find "$OPENWRT_PATH/bin/targets" -maxdepth 2 -type d 2>/dev/null | head -10
-          else
-            echo "targets目录不存在"
-          fi
-          exit 0
-        fi
-        
-        # 进入固件输出目录
-        cd "$FIRMWARE_DIR"
-        echo "当前工作目录: $(pwd)"
-        echo "目录内容:"
-        ls -la
+        # 进入固件输出目录（使用通配符匹配实际目录）
+        echo "进入固件输出目录..."
+        cd "$OPENWRT_PATH/bin/targets/*/*" || {
+          echo "错误：无法进入固件输出目录！"
+          exit 1
+        }
         
         # 复制配置文件到当前目录（使用固件标签命名）
-        cp "$OPENWRT_PATH/.config" "${FIRMWARE_TAG}.config"
+        echo "复制配置文件..."
+        if ! cp "$OPENWRT_PATH/.config" "${FIRMWARE_TAG}.config"; then
+          echo "错误：复制配置文件失败！"
+          exit 1
+        fi
+        
         # 重命名构建信息文件
-        if [ -f "config.buildinfo" ]; then
-          mv config.buildinfo "${FIRMWARE_TAG}.buildinfo"
+        echo "重命名构建信息文件..."
+        if ! mv config.buildinfo "${FIRMWARE_TAG}.buildinfo"; then
+          echo "错误：重命名构建信息文件失败！"
+          exit 1
         fi
         
         # 创建packages目录
         mkdir -p packages
+        
         # 移动所有.ipk文件到packages目录（忽略错误）
-        find "$OPENWRT_PATH/bin/packages" -name "*.ipk" -exec mv {} packages/ \; 2>/dev/null || true
+        echo "移动.ipk文件..."
+        mv -f "$OPENWRT_PATH/bin/packages"*/*/*.ipk packages/ 2>/dev/null || true
+        
         # 移动所有.apk文件到packages目录（忽略错误）
-        find "$OPENWRT_PATH/bin/packages" -name "*.apk" -exec mv {} packages/ \; 2>/dev/null || true
+        echo "移动.apk文件..."
+        mv -f "$OPENWRT_PATH/bin/packages"*/*/*.apk packages/ 2>/dev/null || true
         
-        # 如果packages目录不为空，则打包
-        if [ "$(ls -A packages/ 2>/dev/null)" ]; then
-          # 将packages目录打包成tar.gz文件
-          tar -zcf "${FIRMWARE_TAG}.Packages.tar.gz" packages
+        # 将packages目录打包成tar.gz文件
+        echo "打包packages目录..."
+        if ! tar -zcf "${FIRMWARE_TAG}.Packages.tar.gz" packages; then
+          echo "错误：打包packages目录失败！"
+          exit 1
         fi
-        # 删除packages目录
-        rm -rf packages
         
-        # 删除不需要的文件（如果存在）
-        rm -f feeds.buildinfo version.buildinfo sha256sums profiles.json
+        # 删除不需要的文件
+        echo "清理不需要的文件..."
+        rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
         
         # 根据仓库类型确定固件前缀
         case "$REPO_SHORT" in
@@ -585,44 +656,38 @@ jobs:
         esac
         
         # 查找并重命名固件文件
-        echo "查找固件文件..."
-        # 尝试多种可能的固件文件模式
-        FIRMWARE_FOUND=false
-        
-        for pattern in \
-          "${FIRMWARE_PREFIX}-qualcommax-ipq60xx-jdcloud_${DEVICE}-squashfs-factory.bin" \
-          "${FIRMWARE_PREFIX}-qualcommax-ipq60xx-jdcloud_${DEVICE}-squashfs-sysupgrade.bin" \
-          "${FIRMWARE_PREFIX}-qualcommax-ipq60xx-${DEVICE}-squashfs-factory.bin" \
-          "${FIRMWARE_PREFIX}-qualcommax-ipq60xx-${DEVICE}-squashfs-sysupgrade.bin" \
-          "${FIRMWARE_PREFIX}-ipq60xx-jdcloud_${DEVICE}-squashfs-factory.bin" \
-          "${FIRMWARE_PREFIX}-ipq60xx-jdcloud_${DEVICE}-squashfs-sysupgrade.bin" \
-          "${FIRMWARE_PREFIX}-ipq60xx-${DEVICE}-squashfs-factory.bin" \
-          "${FIRMWARE_PREFIX}-ipq60xx-${DEVICE}-squashfs-sysupgrade.bin" \
-          "*-factory.bin" \
-          "*-sysupgrade.bin"; do
-          # 查找匹配的文件
-          for file in $pattern; do
-            # 检查文件是否存在
-            if [ -f "$file" ]; then
-              echo "处理文件: $file"
-              FIRMWARE_FOUND=true
-              # 如果是工厂固件
-              if [[ "$file" == *"factory.bin" ]]; then
-                # 生成新文件名
-                NEW_NAME="${REPO_SHORT}_${DEVICE}_${CONFIG_TYPE}-squashfs-factory.bin"
-                echo "重命名为: $NEW_NAME"
-                # 重命名文件
-                mv "$file" "$NEW_NAME"
-              # 如果是升级固件
-              elif [[ "$file" == *"sysupgrade.bin" ]]; then
-                # 生成新文件名
-                NEW_NAME="${REPO_SHORT}_${DEVICE}_${CONFIG_TYPE}-squashfs-sysupgrade.bin"
-                echo "重命名为: $NEW_NAME"
-                # 重命名文件
-                mv "$file" "$NEW_NAME"
+        echo "查找并重命名固件文件..."
+        RENAME_COUNT=0
+        for file in "${FIRMWARE_PREFIX}"-qualcommax-ipq60xx-jdcloud_"${DEVICE}"-squashfs-*.bin; do
+          # 检查文件是否存在
+          if [ -f "$file" ]; then
+            echo "处理文件: $file"
+            # 如果是工厂固件
+            if [[ "$file" == *"factory.bin" ]]; then
+              # 生成新文件名
+              NEW_NAME="${REPO_SHORT}_${DEVICE}_${CONFIG_TYPE}-squashfs-factory.bin"
+              echo "重命名为: $NEW_NAME"
+              # 重命名文件
+              if ! mv "$file" "$NEW_NAME"; then
+                echo "错误：重命名文件失败！"
+                exit 1
               fi
+              RENAME_COUNT=$((RENAME_COUNT+1))
+            # 如果是升级固件
+            elif [[ "$file" == *"sysupgrade.bin" ]]; then
+              # 生成新文件名
+              NEW_NAME="${REPO_SHORT}_${DEVICE}_${CONFIG_TYPE}-squashfs-sysupgrade.bin"
+              echo "重命名为: $NEW_NAME"
+              # 重命名文件
+              if ! mv "$file" "$NEW_NAME"; then
+                echo "错误：重命名文件失败！"
+                exit 1
+              fi
+              RENAME_COUNT=$((RENAME_COUNT+1))
             fi
-          done
+          else
+            echo "未找到匹配文件: $file"
+          fi
         done
         
         # 验证重命名结果
@@ -630,15 +695,16 @@ jobs:
         # 列出所有.bin文件（如果存在的话）
         ls -la *.bin 2>/dev/null || echo "没有找到.bin文件"
         
-        # 如果没有找到任何固件文件，显示警告
-        if [ "$FIRMWARE_FOUND" = false ]; then
-          echo "警告：未找到任何固件文件！"
-          echo "目录内容:"
-          ls -la
+        # 检查是否至少有一个文件被重命名
+        if [ $RENAME_COUNT -eq 0 ]; then
+          echo "错误：没有找到任何固件文件进行重命名！"
+          exit 1
         fi
         
         # 将当前目录路径保存到环境变量（供上传步骤使用）
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+      # 添加超时设置
+      timeout-minutes: 10
 
     # 第十六步：显示调试信息（帮助排查问题）
     - name: Debug Information(调试信息)
@@ -656,23 +722,6 @@ jobs:
         # 显示源码目录内容（如果存在）
         echo "=== 源码目录内容 ==="
         ls -la "$OPENWRT_PATH" 2>/dev/null || echo "源码目录不存在"
-        # 显示bin目录内容（如果存在）
-        echo "=== bin目录内容 ==="
-        if [ -d "$OPENWRT_PATH/bin" ]; then
-          ls -la "$OPENWRT_PATH/bin"
-          # 显示targets目录内容（如果存在）
-          echo "=== targets目录内容 ==="
-          if [ -d "$OPENWRT_PATH/bin/targets" ]; then
-            ls -la "$OPENWRT_PATH/bin/targets"
-            # 显示子目录内容（如果存在）
-            echo "=== targets子目录 ==="
-            find "$OPENWRT_PATH/bin/targets" -maxdepth 2 -type d 2>/dev/null | head -10
-          else
-            echo "targets目录不存在"
-          fi
-        else
-          echo "bin目录不存在"
-        fi
         # 验证配置文件
         echo "=== 配置文件验证 ==="
         # 检查配置文件是否存在
@@ -683,19 +732,14 @@ jobs:
         else
           echo "配置文件不存在: $CONFIG_FILE"
         fi
-        # 显示最终配置中的NSS相关配置
-        echo "=== 最终NSS配置 ==="
-        if [ -f "$OPENWRT_PATH/.config" ]; then
-          grep -E "CONFIG_ATH11K_MEM_PROFILE_512M|CONFIG_NSS_FIRMWARE_VERSION" "$OPENWRT_PATH/.config" || echo "未找到NSS配置"
-        else
-          echo "最终配置文件不存在"
-        fi
+      # 添加超时设置
+      timeout-minutes: 5
 
     # 第十七步：上传固件到Artifact（临时存储）
     - name: Upload Firmware To Artifact(将固件上传到Artifact)
       # 只有编译成功且不发布固件时才执行
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
-      # 使用官方的upload-artifact Action（升级到v4以解决弃用错误）
+      # 使用官方的upload-artifact Action，更新到v4版本
       uses: actions/upload-artifact@v4
       # 传递参数给Action
       with:
@@ -703,6 +747,10 @@ jobs:
         name: ${{ env.REPO_SHORT }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.CONFIG_TYPE }}-${{ env.DEVICE }}-${{ env.FILE_DATE }}
         # 指定要上传的文件路径
         path: ${{ env.FIRMWARE_PATH }}
+        # 设置Artifact保留天数
+        retention-days: 7
+      # 添加超时设置
+      timeout-minutes: 30
 
     # 第十八步：上传固件到Release（正式发布）
     - name: Upload Firmware To Release(发布固件)
@@ -738,9 +786,8 @@ jobs:
           - 固件内核版本：**${{ env.VERSION_KERNEL }}**
           - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
           - ${{ env.VERSION_INFO }}
-          ### 📒 NSS配置
-          - 内存配置: **CONFIG_ATH11K_MEM_PROFILE_512M=y**
-          - NSS固件版本: **${{ env.REPO_SHORT == 'LibWrt' && '11.4' || '12.5' }}**
+      # 添加超时设置
+      timeout-minutes: 30
 
     # 第十九步：清理临时文件（释放磁盘空间）
     - name: Clean Up(清理临时文件)
@@ -748,11 +795,20 @@ jobs:
       if: always()
       # 运行Shell命令
       run: |
+        # 设置错误处理：任何命令失败时立即退出
+        set -e
+        
         # 删除目标目录下的构建文件（释放磁盘空间）
-        sudo rm -rf /mnt/openwrt/build_dir/target-*
-        sudo rm -rf /mnt/openwrt/build_dir/host-*
-        # 提示清理完成
-        echo "清理完成"
+        echo "清理构建文件..."
+        if [ -d "/mnt/openwrt/build_dir" ]; then
+          sudo rm -rf /mnt/openwrt/build_dir/target-* || true
+          sudo rm -rf /mnt/openwrt/build_dir/host-* || true
+          echo "构建文件清理完成！"
+        else
+          echo "构建目录不存在，跳过清理"
+        fi
+      # 添加超时设置
+      timeout-minutes: 10
 
     # 第二十步：删除旧缓存（管理缓存空间）
     - name: Delete Old Cache(删除旧缓存)
@@ -760,16 +816,30 @@ jobs:
       if: always()
       # 运行Shell命令
       run: |
+        # 设置错误处理：任何命令失败时立即退出
+        set -e
+        
         # 获取匹配的缓存列表并删除
+        echo "删除旧缓存..."
         gh cache list --key ${{ env.REPO_SHORT }}-${{ env.DEVICE_TARGET }}-${{ env.CONFIG_TYPE }}-${{ env.DEVICE }}- --json key --jq '.[] | .key' | while read -r key; do
           gh cache delete "$key"
-        done
-        # 显示缓存状态
+        done || echo "删除旧缓存失败，但继续执行"
+        
+        # 输出缓存状态
         echo "========cache status========"
-        # 显示ccache缓存大小
-        echo "ccache: $(du -sh $OPENWRT_PATH/.ccache | cut -f 1)"
-        # 显示staging_dir缓存大小
-        echo "staging: $(du -sh $OPENWRT_PATH/staging_dir | cut -f 1)"
+        if [ -d "$OPENWRT_PATH/.ccache" ]; then
+          echo "ccache: $(du -sh $OPENWRT_PATH/.ccache | cut -f 1)"
+        else
+          echo "ccache: 目录不存在"
+        fi
+        
+        if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+          echo "staging: $(du -sh $OPENWRT_PATH/staging_dir | cut -f 1)"
+        else
+          echo "staging: 目录不存在"
+        fi
       # 设置环境变量（提供GitHub Token）
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 添加超时设置
+      timeout-minutes: 10

@@ -177,7 +177,7 @@ jobs:
 
     # 第四步：检出代码（下载仓库中的文件）
     - name: Checkout(检出代码)
-      # 使用官方的checkout Action下载代码
+      # 使用官方的checkout Action下载代码，更新到v4版本
       uses: actions/checkout@v4
 
     # 第五步：克隆源代码（下载OpenWrt源码）
@@ -299,7 +299,7 @@ jobs:
 
     # 第七步：缓存工具链（加速编译）
     - name: Cache Toolchain(缓存工具链)
-      # 使用官方的cache Action
+      # 使用官方的cache Action，更新到v4版本
       uses: actions/cache@v4
       # 传递参数给Action
       with:
@@ -634,7 +634,7 @@ jobs:
     - name: Upload Firmware To Artifact(将固件上传到Artifact)
       # 只有编译成功且不发布固件时才执行
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
-      # 使用官方的upload-artifact Action
+      # 使用官方的upload-artifact Action，更新到v4版本
       uses: actions/upload-artifact@v4
       # 传递参数给Action
       with:

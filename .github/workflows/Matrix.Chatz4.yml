@@ -557,15 +557,41 @@ jobs:
         THREADS=$(nproc)
         echo "使用 $THREADS 线程编译"
         
-        # 尝试并行编译（使用所有CPU核心）
+        # 尝试并行编译（使用所有CPU核心），并保存详细日志
         echo "开始并行编译..."
-        if ! make -j$THREADS; then
+        if ! make -j$THREADS V=s 2>&1 | tee build.log; then
           echo "并行编译失败，尝试单线程编译..."
           
           # 如果并行编译失败，尝试单线程编译（输出详细错误信息）
-          if ! make -j1 V=s; then
+          if ! make -j1 V=s 2>&1 | tee build-single.log; then
             echo "编译失败！"
             echo "status=failed" >> $GITHUB_OUTPUT
+            
+            # 输出错误日志的最后200行，帮助调试
+            echo "=== 编译错误日志（最后200行）==="
+            tail -200 build-single.log
+            
+            # 检查是否有常见的错误原因
+            echo "=== 检查常见错误原因 ==="
+            if grep -q "No space left on device" build-single.log; then
+              echo "错误：磁盘空间不足！"
+              df -h
+            fi
+            if grep -q "Cannot allocate memory" build-single.log; then
+              echo "错误：内存不足！"
+              free -h
+            fi
+            if grep -q "Permission denied" build-single.log; then
+              echo "错误：权限问题！"
+            fi
+            if grep -q "error:" build-single.log | head -5; then
+              echo "错误：发现编译错误！"
+            fi
+            
+            # 保存完整的错误日志
+            echo "保存完整错误日志..."
+            cp build-single.log "$GITHUB_WORKSPACE/compile-error.log"
+            
             exit 1
           fi
         fi
@@ -629,7 +655,27 @@ jobs:
       # 添加超时设置
       timeout-minutes: 5
 
-    # 第十五步：整理文件（重命名和打包固件）
+    # 第十五步：上传编译日志（用于调试）
+    - name: Upload Build Logs(上传编译日志)
+      # 无论编译是否成功都执行
+      if: always()
+      # 使用官方的upload-artifact Action，更新到v4版本
+      uses: actions/upload-artifact@v4
+      # 传递参数给Action
+      with:
+        # 定义Artifact名称
+        name: ${{ env.REPO_SHORT }}-build-logs-${{ env.DEVICE_TARGET }}-${{ env.CONFIG_TYPE }}-${{ env.DEVICE }}-${{ env.FILE_DATE }}
+        # 指定要上传的文件路径
+        path: |
+          ${{ env.OPENWRT_PATH }}/build.log
+          ${{ env.OPENWRT_PATH }}/build-single.log
+          ${{ github.workspace }}/compile-error.log
+        # 设置Artifact保留天数
+        retention-days: 7
+      # 添加超时设置
+      timeout-minutes: 5
+
+    # 第十六步：整理文件（重命名和打包固件）
     - name: Organize Files(整理文件)
       # 只有编译成功才执行
       if: steps.compile.outputs.status == 'success'
@@ -810,7 +856,7 @@ jobs:
       # 添加超时设置
       timeout-minutes: 10
 
-    # 第十六步：显示调试信息（帮助排查问题）
+    # 第十七步：显示调试信息（帮助排查问题）
     - name: Debug Information(调试信息)
       # 无论上一步是否成功都执行
       if: always()
@@ -839,7 +885,7 @@ jobs:
       # 添加超时设置
       timeout-minutes: 5
 
-    # 第十七步：上传固件到Artifact（临时存储）
+    # 第十八步：上传固件到Artifact（临时存储）
     - name: Upload Firmware To Artifact(将固件上传到Artifact)
       # 只有编译成功且不发布固件时才执行
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
@@ -856,7 +902,7 @@ jobs:
       # 添加超时设置
       timeout-minutes: 30
 
-    # 第十八步：上传固件到Release（正式发布）
+    # 第十九步：上传固件到Release（正式发布）
     - name: Upload Firmware To Release(发布固件)
       # 只有编译成功且启用发布时才执行
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
@@ -893,7 +939,7 @@ jobs:
       # 添加超时设置
       timeout-minutes: 30
 
-    # 第十九步：清理临时文件（释放磁盘空间）
+    # 第二十步：清理临时文件（释放磁盘空间）
     - name: Clean Up(清理临时文件)
       # 无论上一步是否成功都执行
       if: always()
@@ -914,7 +960,7 @@ jobs:
       # 添加超时设置
       timeout-minutes: 10
 
-    # 第二十步：删除旧缓存（管理缓存空间）
+    # 第二十一步：删除旧缓存（管理缓存空间）
     - name: Delete Old Cache(删除旧缓存)
       # 无论上一步是否成功都执行
       if: always()

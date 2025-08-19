@@ -166,6 +166,12 @@ jobs:
             echo "注意：合并后未生成 $TARGET（未找到任何 fragment），请检查 configs/ 目录及文件名是否正确。"
             exit 1
           fi
+         
+      - name: Load Custom Configuration(加载自定义配置)
+        run: |
+          chmod +x $GITHUB_WORKSPACE/scripts/Script.sh
+          cd $OPENWRT_PATH
+          $GITHUB_WORKSPACE/scripts/Script.sh
 
       - name: Generate Variables（生成额外变量）
         run: |
@@ -196,16 +202,6 @@ jobs:
           cd "${OPENWRT_PATH}"
           ./scripts/feeds update -a || true
           ./scripts/feeds install -a || true
-
-      - name: Run DIY script if present（如有自定义脚本则执行）
-        run: |
-          if [ -f "${{ github.workspace }}/$DIY_SCRIPT" ]; then
-            chmod +x "${{ github.workspace }}/$DIY_SCRIPT" || true
-            cd "${OPENWRT_PATH}"
-            "${{ github.workspace }}/$DIY_SCRIPT" || true
-          else
-            echo "未检测到自定义脚本，跳过。"
-          fi
 
       - name: Download DL Package（make download）
         run: |

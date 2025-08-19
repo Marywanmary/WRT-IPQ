@@ -245,3 +245,26 @@ jobs:
           ${{ env.OPENWRT_PATH }}/oplist.txt
           ${{ env.OPENWRT_PATH }}/compile_logs.tar.gz
         retention-days: 30
+
+    # 新增：上传到Release的步骤
+    - name: Get current date
+      id: date
+      run: echo "::set-output name=date::$(date +'%Y-%m-%d %H:%M:%S')"
+
+    - name: Upload to Release
+      if: env.FIRMWARE_RELEASE == 'true'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ env.TAG }}
+        name: Firmware Release ${{ env.TAG }}
+        body: |
+          Firmware for ${{ matrix.REPO_SHORT }} ${{ matrix.CONFIG_TYPE }} configuration
+          Build date: ${{ steps.date.outputs.date }}
+          Commit: ${{ github.sha }}
+        files: |
+          ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config
+          ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.buildinfo
+          ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.Packages.tar.gz
+          ${{ env.OPENWRT_PATH }}/bin/targets/**/*.bin
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

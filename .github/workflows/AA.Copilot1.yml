@@ -263,4 +263,102 @@ jobs:
           rm -rf "$PKG_TMP" || true
 
           # 仅对以特定前缀开头的固件名进行重命名，避免改动非固件 .bin
-          echo "重命名固件 .bin 文件：替换指定前缀为 ${R
+          echo "重命名固件 .bin 文件：替换指定前缀为 ${REPO_SHORT} 并在末尾添加 _${CONFIG_TYPE}"
+          FW_TMP=$(mktemp -d)
+          
+          # 查找所有.bin文件
+          find "${OPENWRT_PATH}" -type f -name '*.bin' | while read f; do
+            base=$(basename "$f" .bin)
+            dir=$(dirname "$f")
+            newbase=""
+            
+            # 根据不同的前缀进行重命名
+            if [[ "$base" == immortalwrt-qualcommax-ipq60xx-jdcloud* ]]; then
+              rest=${base#immortalwrt-qualcommax-ipq60xx-jdcloud}
+              newbase="${REPO_SHORT}${rest}"
+            elif [[ "$base" == libwrt-qualcommax-ipq60xx-jdcloud* ]]; then
+              rest=${base#libwrt-qualcommax-ipq60xx-jdcloud}
+              newbase="${REPO_SHORT}${rest}"
+            elif [[ "$base" == openwrt-qualcommax-ipq60xx-jdcloud* ]]; then
+              rest=${base#openwrt-qualcommax-ipq60xx-jdcloud}
+              newbase="${REPO_SHORT}${rest}"
+            fi
+            
+            # 如果匹配到前缀，则进行重命名和复制
+            if [ -n "$newbase" ]; then
+              # 确保不会重复添加后缀
+              if [[ "$newbase" != *"_${CONFIG_TYPE}" ]]; then
+                newbase="${newbase}_${CONFIG_TYPE}"
+              fi
+              
+              newname="${dir}/${newbase}.bin"
+              if [ "$f" != "$newname" ]; then
+                mv -f "$f" "$newname" || true
+                echo "Renamed: $f -> $newname"
+              fi
+              
+              # 复制到临时目录以便打包
+              if cp -f "${newname}" "${FW_TMP}/"; then
+                echo "Copied: ${newname} to ${FW_TMP}/"
+                echo "$newname" >> "${OPENWRT_PATH}/renamed_firmware_files.txt"
+              else
+                echo "Failed to copy: ${newname} to ${FW_TMP}/"
+              fi
+            fi
+          done
+          
+          # 计算重命名的文件数量
+          if [ -f "${OPENWRT_PATH}/renamed_firmware_files.txt" ]; then
+            rename_count=$(wc -l < "${OPENWRT_PATH}/renamed_firmware_files.txt")
+            rm -f "${OPENWRT_PATH}/renamed_firmware_files.txt"
+          else
+            rename_count=0
+          fi
+          
+          echo "Renamed $rename_count firmware files (copied to $FW_TMP for packaging)."
+
+          # 生成固件 tar 包，命名为 ${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz
+          if [ "$(ls -A "$FW_TMP" 2>/dev/null || true)" ]; then
+            tar -C "$FW_TMP" -czf "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz" .
+            echo "Created firmware tarball: ${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz"
+            # 添加调试信息：列出tar包内容
+            echo "Firmware tarball contents:"
+            tar -tzf "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz" || echo "Failed to list tarball contents"
+          else
+            echo "Warning: 未在 $FW_TMP 中找到任何重命名后的固件文件，固件包未创建。请检查重命名匹配规则。"
+            ls -la "$FW_TMP" || echo "Failed to list temp directory"
+          fi
+          rm -rf "$FW_TMP" || true
+
+      - name: Upload artifacts（上传产物）
+        if: steps.compile.outputs.status == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-artifacts
+          path: |
+            ${{ env.OPENWRT_PATH }}/oplist.txt
+            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config
+            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.buildinfo
+            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.Packages.tar.gz
+            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.firmware.tar.gz
+
+      - name: Upload Firmware To Release（如启用则创建/更新 Release 并上传固件）
+        if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
+        uses: ncipollo/release-action@v1
+        with:
+          name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
+          allowUpdates: true
+          tag: ${{ env.FIRMWARE_TAG }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.firmware.tar.gz
+          body: |
+            **This is OpenWrt Firmware (TAG: ${{ env.FIRMWARE_TAG }})**
+            - 源码仓库: ${{ env.REPO_URL }}
+            - 源码分支: ${{ env.REPO_BRANCH }}
+            - 版本信息: ${{ env.VERSION_INFO }}
+
+      - name: 清理与输出缓存信息
+        run: |
+          echo "清理临时文件并输出缓存占用情况..."
+          du -sh "${OPENWRT_PATH}/.ccache" 2>/dev/null || true
+          du -sh "${OPENWRT_PATH}/staging_dir" 2>/dev/null || true

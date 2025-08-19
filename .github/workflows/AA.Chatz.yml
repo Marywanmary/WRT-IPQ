@@ -6,9 +6,6 @@ on:
   schedule:
     - cron: 0 16 * * 4
 
-# 设置运行名称以显示正在编译的具体分支和配置
-run-name: Building ${{ github.workflow }} - ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
-
 env:
   # 以下变量将在矩阵中被覆盖
   REPO_URL: https://github.com/laipeng668/openwrt-6.x.git
@@ -16,9 +13,8 @@ env:
   # 以下变量保持不变
   CLASH_KERNEL: amd64
   MADS: false
-  UPLOAD_BIN_DIR: false
+  UPLOAD_BIN_DIR: true
   FIRMWARE_RELEASE: true
-  FIRMWARE_TAG: IPQ60XX
   TZ: Asia/Shanghai
 
 jobs:
@@ -39,7 +35,8 @@ jobs:
             REPO_URL: 'https://github.com/laipeng668/openwrt-6.x.git'
             REPO_BRANCH: 'k6.12-nss'
     
-    name: Build ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
+    # 在job级别设置运行名称，显示正在编译的具体分支和配置
+    name: Building ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
     
     steps:
     - name: Check Server Performance(检查服务器性能)
@@ -259,13 +256,13 @@ jobs:
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
       uses: ncipollo/release-action@main
       with:
-        name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
+        name: ${{ env.DATE }} for ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
         allowUpdates: true
-        tag: ${{ env.FIRMWARE_TAG }}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
+        tag: ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
         token: ${{ secrets.GITHUB_TOKEN }}
         artifacts: ${{ env.FIRMWARE_PATH }}/*
         body: |
-          **This is OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}**
+          **This is OpenWrt Firmware for ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}**
           ### 📒 固件信息
           - 这是${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}配置的固件，默认主题为Argon；
           - 该固件在ImmortalWrt/LibWrt的基础上，添加了额外的软件包，并添加了若干工具，具体详见对应机型的config。

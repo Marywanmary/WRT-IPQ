@@ -107,19 +107,19 @@ jobs:
         # 根据矩阵变量选择配置文件
         if [ "${{ matrix.REPO_SHORT }}" == "LibWrt" ]; then
           if [ "${{ matrix.CONFIG_TYPE }}" == "Pro" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/IPQ60XX_Pro.config $GITHUB_WORKSPACE/configs/IPQ60XX_LibWrt.config > $OPENWRT_PATH/.config
+            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Pro.config $GITHUB_WORKSPACE/configs/LibWrt.config > $OPENWRT_PATH/.config
           elif [ "${{ matrix.CONFIG_TYPE }}" == "Max" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/IPQ60XX_Max.config $GITHUB_WORKSPACE/configs/IPQ60XX_LibWrt.config > $OPENWRT_PATH/.config
+            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config $GITHUB_WORKSPACE/configs/LibWrt.config > $OPENWRT_PATH/.config
           elif [ "${{ matrix.CONFIG_TYPE }}" == "Ultra" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/IPQ60XX_Max.config $GITHUB_WORKSPACE/configs/IPQ60XX_Ultra.config $GITHUB_WORKSPACE/configs/IPQ60XX_LibWrt.config > $OPENWRT_PATH/.config
+            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config $GITHUB_WORKSPACE/configs/Ultra.config $GITHUB_WORKSPACE/configs/LibWrt.config > $OPENWRT_PATH/.config
           fi
         else
           if [ "${{ matrix.CONFIG_TYPE }}" == "Pro" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/IPQ60XX_Pro.config > $OPENWRT_PATH/.config
+            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Pro.config > $OPENWRT_PATH/.config
           elif [ "${{ matrix.CONFIG_TYPE }}" == "Max" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/IPQ60XX_Max.config > $OPENWRT_PATH/.config
+            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config > $OPENWRT_PATH/.config
           elif [ "${{ matrix.CONFIG_TYPE }}" == "Ultra" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/IPQ60XX_Max.config $GITHUB_WORKSPACE/configs/IPQ60XX_Ultra.config > $OPENWRT_PATH/.config
+            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config $GITHUB_WORKSPACE/configs/Ultra.config > $OPENWRT_PATH/.config
           fi
         fi
         
@@ -162,19 +162,19 @@ jobs:
         # 根据矩阵变量重新加载配置文件
         if [ "${{ matrix.REPO_SHORT }}" == "LibWrt" ]; then
           if [ "${{ matrix.CONFIG_TYPE }}" == "Pro" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/IPQ60XX_Pro.config $GITHUB_WORKSPACE/configs/IPQ60XX_LibWrt.config > $OPENWRT_PATH/.config
+            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Pro.config $GITHUB_WORKSPACE/configs/LibWrt.config > $OPENWRT_PATH/.config
           elif [ "${{ matrix.CONFIG_TYPE }}" == "Max" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/IPQ60XX_Max.config $GITHUB_WORKSPACE/configs/IPQ60XX_LibWrt.config > $OPENWRT_PATH/.config
+            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config $GITHUB_WORKSPACE/configs/LibWrt.config > $OPENWRT_PATH/.config
           elif [ "${{ matrix.CONFIG_TYPE }}" == "Ultra" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/IPQ60XX_Max.config $GITHUB_WORKSPACE/configs/IPQ60XX_Ultra.config $GITHUB_WORKSPACE/configs/IPQ60XX_LibWrt.config > $OPENWRT_PATH/.config
+            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config $GITHUB_WORKSPACE/configs/Ultra.config $GITHUB_WORKSPACE/configs/LibWrt.config > $OPENWRT_PATH/.config
           fi
         else
           if [ "${{ matrix.CONFIG_TYPE }}" == "Pro" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/IPQ60XX_Pro.config > $OPENWRT_PATH/.config
+            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Pro.config > $OPENWRT_PATH/.config
           elif [ "${{ matrix.CONFIG_TYPE }}" == "Max" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/IPQ60XX_Max.config > $OPENWRT_PATH/.config
+            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config > $OPENWRT_PATH/.config
           elif [ "${{ matrix.CONFIG_TYPE }}" == "Ultra" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/IPQ60XX_Max.config $GITHUB_WORKSPACE/configs/IPQ60XX_Ultra.config > $OPENWRT_PATH/.config
+            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config $GITHUB_WORKSPACE/configs/Ultra.config > $OPENWRT_PATH/.config
           fi
         fi
         

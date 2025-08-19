@@ -1,4 +1,4 @@
-name: Auto_Build_ipq60xx
+name: Auto_Build_ipq60xx.Chatz
 
 on:
   workflow_dispatch:

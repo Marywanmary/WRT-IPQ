@@ -17,9 +17,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     
-    # 使用run-name而不是name来显示正在编译的具体分支和配置
-    run-name: Building: ${{ matrix.REPO_SHORT }} - ${{ matrix.CONFIG_TYPE }}
-    
     strategy:
       matrix:
         REPO_SHORT: ['ImmWrt', 'OpenWrt', 'LibWrt']
@@ -38,6 +35,10 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@main
+
+    - name: Set run name
+      run: |
+        echo "RUN_NAME=Building: ${{ matrix.REPO_SHORT }} - ${{ matrix.CONFIG_TYPE }}" >> $GITHUB_ENV
 
     - name: Initialization environment
       env:

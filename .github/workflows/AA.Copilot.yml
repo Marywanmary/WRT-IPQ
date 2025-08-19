@@ -14,20 +14,18 @@ env:
   DIY_SCRIPT: scripts/Script.sh
   CLASH_KERNEL: amd64
   MADS: false
-  UPLOAD_BIN_DIR: true        # 已设置为 true
+  UPLOAD_BIN_DIR: true
   FIRMWARE_RELEASE: true
 
 jobs:
-  # 注意：将 run-name 放在 job 的 name 字段中，因 matrix 仅在 job 级别可用
+  # job 层可以引用 matrix，因而把 run-name 放到 job 的 name 字段
   Build:
-    # 使用矩阵展开时，在 job 层设置 name 才能引用 matrix
     name: "Build ${{ matrix.REPO_SHORT }} - ${{ matrix.CONFIG_TYPE }} (branch: ${{ matrix.branch }})"
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
         include:
-          # ImmWrt 3 种配置
           - REPO_SHORT: 'ImmWrt'
             url: 'https://github.com/laipeng668/immortalwrt.git'
             branch: 'master'
@@ -40,7 +38,6 @@ jobs:
             url: 'https://github.com/laipeng668/immortalwrt.git'
             branch: 'master'
             CONFIG_TYPE: 'Ultra'
-          # OpenWrt 3 种配置
           - REPO_SHORT: 'OpenWrt'
             url: 'https://github.com/laipeng668/openwrt.git'
             branch: 'master'
@@ -53,7 +50,6 @@ jobs:
             url: 'https://github.com/laipeng668/openwrt.git'
             branch: 'master'
             CONFIG_TYPE: 'Ultra'
-          # LibWrt 3 种配置（分支为 k6.12-nss）
           - REPO_SHORT: 'LibWrt'
             url: 'https://github.com/laipeng668/openwrt-6.x.git'
             branch: 'k6.12-nss'
@@ -68,13 +64,12 @@ jobs:
             CONFIG_TYPE: 'Ultra'
 
     env:
-      # 从矩阵继承并定义用于脚本的变量
       REPO_URL: ${{ matrix.url }}
       REPO_BRANCH: ${{ matrix.branch }}
       REPO_SHORT: ${{ matrix.REPO_SHORT }}
       CONFIG_TYPE: ${{ matrix.CONFIG_TYPE }}
-      OPENWRT_PATH: /mnt/openwrt            # 克隆 OpenWrt 源码的路径
-      FRAG_DIR: configs                     # 存放 config 片段的目录（位于 workflow 仓库根目录）
+      OPENWRT_PATH: /mnt/openwrt
+      FRAG_DIR: configs
       GENERAL_FRAGMENT: configs/General
       IPQ_FRAGMENT: configs/ipq60xx
       LIBWRT_FRAGMENT: configs/LibWrt
@@ -88,9 +83,7 @@ jobs:
       - name: 检查服务器性能（提示）
         run: |
           echo "开始检查服务器信息..."
-          echo "CPU 信息："
           grep -m1 'model name' /proc/cpuinfo || true
-          echo "内存与磁盘信息："
           free -h || true
           df -h || true
 
@@ -99,7 +92,6 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get -y update
-          # 依赖安装依据目标构建需求，若失败则继续（保证 workflow 不因单个依赖而停）
           sudo apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libssl-dev python3 python3-distutils rsync unzip zlib1g-dev subversion wget || true
           sudo timedatectl set-timezone "$TZ" || true
 
@@ -107,58 +99,78 @@ jobs:
         run: |
           sudo mkdir -p "${OPENWRT_PATH}"
           sudo chown -R $(id -u):$(id -g) "${OPENWRT_PATH}"
-          # 克隆指定分支（depth 1）
           git clone --depth 1 -b "${REPO_BRANCH}" --single-branch "${REPO_URL}" "${OPENWRT_PATH}"
           cd "${OPENWRT_PATH}"
           echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
           VERSION_INFO=$(git show -s --date=short --format="作者: %an | 时间: %cd | 内容: %s | hash: %H" || true)
           echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
 
-      - name: Prepare .config by merging config fragments（合并 .config 片段）
+      - name: Prepare .config by merging config fragments（合并 .config 片段，支持带/不带 .config 后缀）
         working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
           CFGDIR="${{ github.workspace }}/${FRAG_DIR}"
           TARGET="${OPENWRT_PATH}/.config"
           rm -f "$TARGET"
+
           echo "准备合并 fragments: REPO_SHORT=${REPO_SHORT}, CONFIG_TYPE=${CONFIG_TYPE}"
           if [ ! -d "$CFGDIR" ]; then
-            echo "错误：configs/ 目录未找到，请在仓库根目录创建 configs/ 并包含 General, ipq60xx, Pro, Max, Ultra, LibWrt（如需）"
+            echo "错误：configs/ 目录未找到，请在仓库根目录创建 configs/ 并包含 General(.config), ipq60xx(.config), Pro(.config), Max(.config), Ultra(.config), LibWrt(.config)（如需）"
             ls -la || true
             exit 1
           fi
 
+          # 辅助函数：接受 fragment 基名（不含扩展名），按两种候选名查找并追加（支持 xxx 和 xxx.config）
+          append_fragment() {
+            local base="$1"
+            local found=0
+            for cand in "$CFGDIR/$base" "$CFGDIR/$base.config"; do
+              if [ -f "$cand" ]; then
+                echo "Appending fragment: $cand"
+                cat "$cand" >> "$TARGET"
+                echo -e "\n# --- appended $cand ---\n" >> "$TARGET"
+                found=1
+                break
+              fi
+            done
+            if [ $found -eq 0 ]; then
+              echo "Warning: fragment for '$base' not found (tried: $CFGDIR/$base, $CFGDIR/$base.config)"
+            fi
+          }
+
           # 基本顺序：General + ipq60xx + (Pro/Max/(Max+Ultra)) [+ LibWrt if LibWrt 仓库]
-          echo "合并 General 和 ipq60xx"
-          [ -f "$CFGDIR/General" ] && cat "$CFGDIR/General" >> "$TARGET"
-          [ -f "$CFGDIR/ipq60xx" ] && cat "$CFGDIR/ipq60xx" >> "$TARGET"
+          append_fragment "General"
+          append_fragment "ipq60xx"
 
           if [ "$CONFIG_TYPE" = "Pro" ]; then
-            [ -f "$CFGDIR/Pro" ] && cat "$CFGDIR/Pro" >> "$TARGET"
+            append_fragment "Pro"
           elif [ "$CONFIG_TYPE" = "Max" ]; then
-            [ -f "$CFGDIR/Max" ] && cat "$CFGDIR/Max" >> "$TARGET"
+            append_fragment "Max"
           elif [ "$CONFIG_TYPE" = "Ultra" ]; then
             # Ultra 使用 Max + Ultra
-            [ -f "$CFGDIR/Max" ] && cat "$CFGDIR/Max" >> "$TARGET"
-            [ -f "$CFGDIR/Ultra" ] && cat "$CFGDIR/Ultra" >> "$TARGET"
+            append_fragment "Max"
+            append_fragment "Ultra"
           else
             echo "未知的 CONFIG_TYPE: $CONFIG_TYPE"
             exit 1
           fi
 
-          # 如果是 LibWrt，则追加 LibWrt 片段
           if [ "$REPO_SHORT" = "LibWrt" ]; then
-            [ -f "$CFGDIR/LibWrt" ] && cat "$CFGDIR/LibWrt" >> "$TARGET"
+            append_fragment "LibWrt"
           fi
 
           echo "合并完成，预览 .config（前200行）："
-          sed -n '1,200p' "$TARGET" || true
+          if [ -f "$TARGET" ]; then
+            sed -n '1,200p' "$TARGET" || true
+          else
+            echo "注意：合并后未生成 $TARGET（未找到任何 fragment），请检查 configs/ 目录及文件名是否正确。"
+            exit 1
+          fi
 
       - name: Generate Variables（生成额外变量）
         run: |
           set -euo pipefail
           cd "${OPENWRT_PATH}"
-          # 生成构建相关环境变量供后续步骤使用
           make defconfig >/dev/null 2>&1 || true
           SOURCE_REPO="$(basename ${REPO_URL})"
           echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
@@ -200,7 +212,6 @@ jobs:
           cd "${OPENWRT_PATH}"
           make defconfig || true
           make download -j$(nproc) || true
-          # 清理过小的下载文件
           find dl -size -1024c -exec rm -f {} \; || true
 
       - name: Compile Firmware（编译固件）
@@ -224,47 +235,33 @@ jobs:
         working-directory: ${{ env.OPENWRT_PATH }}
         run: |
           set -euo pipefail
-          echo "生成 oplist.txt 列表..."
           ls -la > "${OPENWRT_PATH}/oplist.txt" || true
 
-          # 重命名 .config -> REPO_SHORT+CONFIG_TYPE.config（存在时）
           if [ -f "${OPENWRT_PATH}/.config" ]; then
             mv -f "${OPENWRT_PATH}/.config" "${OPENWRT_PATH}/${REPO_SHORT}${CONFIG_TYPE}.config" || true
-            echo "已重命名 .config -> ${REPO_SHORT}${CONFIG_TYPE}.config"
           fi
 
-          # 重命名 config.buildinfo -> REPO_SHORT+CONFIG_TYPE.buildinfo（存在时）
           if [ -f "${OPENWRT_PATH}/config.buildinfo" ]; then
             mv -f "${OPENWRT_PATH}/config.buildinfo" "${OPENWRT_PATH}/${REPO_SHORT}${CONFIG_TYPE}.buildinfo" || true
-            echo "已重命名 config.buildinfo -> ${REPO_SHORT}${CONFIG_TYPE}.buildinfo"
           fi
 
-          # 打包所有 .ipk/.apk 为 REPO_SHORT+CONFIG_TYPE.Packages.tar.gz
           PKG_TMP=$(mktemp -d)
           find "${OPENWRT_PATH}" -type f \( -name '*.ipk' -o -name '*.apk' \) -print0 | xargs -0 -I{} cp --parents "{}" "$PKG_TMP" 2>/dev/null || true
           if [ "$(find "$PKG_TMP" -type f | wc -l)" -gt 0 ]; then
             tar -C "$PKG_TMP" -czf "${OPENWRT_PATH}/${REPO_SHORT}${CONFIG_TYPE}.Packages.tar.gz" .
-            echo "Created packages tarball: ${OPENWRT_PATH}/${REPO_SHORT}${CONFIG_TYPE}.Packages.tar.gz"
-          else
-            echo "未找到 ipk/apk 包，跳过打包。"
           fi
           rm -rf "$PKG_TMP" || true
 
-          # 重命名所有后缀为 .bin 的固件文件：在原名（去掉 .bin 前缀）前添加 REPO_SHORT+CONFIG_TYPE
-          echo "重命名 .bin 固件文件，添加前缀 ${REPO_SHORT}${CONFIG_TYPE}"
           find "${OPENWRT_PATH}" -type f -name '*.bin' -print0 | while IFS= read -r -d '' f; do
             dir=$(dirname "$f")
             base=$(basename "$f" .bin)
-            # 避免重复前缀
             case "$base" in
               ${REPO_SHORT}${CONFIG_TYPE}*) echo "已包含前缀，跳过：$f"; continue ;;
             esac
             newname="${dir}/${REPO_SHORT}${CONFIG_TYPE}${base}.bin"
             mv -f "$f" "$newname" || true
-            echo "重命名 $f -> $newname"
           done
 
-          # 设置固件路径（用于上传），优先查找 bin 目录下的固件
           if find "${OPENWRT_PATH}/bin" -type f -name '*.bin' | grep -q .; then
             FIRMWARE_TOP=$(find "${OPENWRT_PATH}/bin" -type f -name '*.bin' -print0 | xargs -0 -n1 dirname | sort -u | head -n1)
             echo "FIRMWARE_PATH=$FIRMWARE_TOP" >> $GITHUB_ENV
@@ -272,14 +269,12 @@ jobs:
             echo "FIRMWARE_PATH=${OPENWRT_PATH}/bin" >> $GITHUB_ENV
           fi
 
-          # 生成发布 tag（使用 REPO_SHORT-CONFIG_TYPE-FILE_DATE 作为 tag）
           if [ -z "${FILE_DATE:-}" ]; then
             FILE_DATE=$(date +"%Y.%m.%d")
             echo "FILE_DATE=$FILE_DATE" >> $GITHUB_ENV
           fi
           RELEASE_TAG="${REPO_SHORT}-${CONFIG_TYPE}-${FILE_DATE}"
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
-          echo "生成 RELEASE_TAG=$RELEASE_TAG"
 
       - name: Upload artifacts（上传产物）
         if: steps.compile.outputs.status == 'success'
@@ -297,7 +292,6 @@ jobs:
         if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
         uses: ncipollo/release-action@v1
         with:
-          # Release 名称与 tag 使用上一步生成的 RELEASE_TAG（已写入 $GITHUB_ENV）
           name: ${{ env.DATE }} for ${{ env.RELEASE_TAG }}
           allowUpdates: true
           tag: ${{ env.RELEASE_TAG }}

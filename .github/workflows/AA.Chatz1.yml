@@ -146,14 +146,20 @@ jobs:
           ${{ env.OPENWRT_ROOT_DIR }}/staging_dir
 
     - name: Refresh The Cache(刷新缓存)
-      if: env.CACHE_STAGING_DIR == 'true'
+      if: env.CACHE_STAGING_DIR == 'true' && steps.cache-toolchain.outputs.cache-hit == 'true'
       run: |
         set -euo pipefail
         
-        # 使用OPENWRT_ROOT_DIR而不是OPENWRT_PATH，因为此时OPENWRT_PATH可能还未设置
-        [ -d "${{ env.OPENWRT_ROOT_DIR }}/staging_dir" ] && find "${{ env.OPENWRT_ROOT_DIR }}/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
-          find "$dir" -type f -exec touch {} +
-        done
+        # 只有当缓存命中时才刷新缓存
+        if [ -d "${{ env.OPENWRT_ROOT_DIR }}/staging_dir" ]; then
+          echo "刷新缓存中..."
+          find "${{ env.OPENWRT_ROOT_DIR }}/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
+            find "$dir" -type f -exec touch {} +
+          done
+          echo "缓存刷新完成"
+        else
+          echo "staging_dir 不存在，跳过缓存刷新"
+        fi
 
     - name: Prepare Configuration(准备配置)
       run: |

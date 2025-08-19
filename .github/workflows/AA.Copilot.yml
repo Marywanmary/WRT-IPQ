@@ -8,11 +8,7 @@ on:
   schedule:
     - cron: '0 16 * * 4'
 
-# 在 actions 页面显示正在编译的仓库和配置类型与分支
-# 注意：此处用双引号包裹整个 run-name，避免括号/冒号导致 YAML 解析问题
-run-name: "Build ${{ matrix.REPO_SHORT }} - ${{ matrix.CONFIG_TYPE }} (branch: ${{ matrix.branch }})"
-
-# 全局环境变量（UPLOAD_BIN_DIR 已改为 true，取消固定 FIRMWARE_TAG）
+# 全局环境变量（UPLOAD_BIN_DIR 已改为 true）
 env:
   TZ: Asia/Shanghai
   DIY_SCRIPT: scripts/Script.sh
@@ -22,12 +18,16 @@ env:
   FIRMWARE_RELEASE: true
 
 jobs:
+  # 注意：将 run-name 放在 job 的 name 字段中，因 matrix 仅在 job 级别可用
   Build:
+    # 使用矩阵展开时，在 job 层设置 name 才能引用 matrix
+    name: "Build ${{ matrix.REPO_SHORT }} - ${{ matrix.CONFIG_TYPE }} (branch: ${{ matrix.branch }})"
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
         include:
+          # ImmWrt 3 种配置
           - REPO_SHORT: 'ImmWrt'
             url: 'https://github.com/laipeng668/immortalwrt.git'
             branch: 'master'
@@ -40,6 +40,7 @@ jobs:
             url: 'https://github.com/laipeng668/immortalwrt.git'
             branch: 'master'
             CONFIG_TYPE: 'Ultra'
+          # OpenWrt 3 种配置
           - REPO_SHORT: 'OpenWrt'
             url: 'https://github.com/laipeng668/openwrt.git'
             branch: 'master'
@@ -52,6 +53,7 @@ jobs:
             url: 'https://github.com/laipeng668/openwrt.git'
             branch: 'master'
             CONFIG_TYPE: 'Ultra'
+          # LibWrt 3 种配置（分支为 k6.12-nss）
           - REPO_SHORT: 'LibWrt'
             url: 'https://github.com/laipeng668/openwrt-6.x.git'
             branch: 'k6.12-nss'
@@ -66,6 +68,7 @@ jobs:
             CONFIG_TYPE: 'Ultra'
 
     env:
+      # 从矩阵继承并定义用于脚本的变量
       REPO_URL: ${{ matrix.url }}
       REPO_BRANCH: ${{ matrix.branch }}
       REPO_SHORT: ${{ matrix.REPO_SHORT }}
@@ -294,6 +297,7 @@ jobs:
         if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
         uses: ncipollo/release-action@v1
         with:
+          # Release 名称与 tag 使用上一步生成的 RELEASE_TAG（已写入 $GITHUB_ENV）
           name: ${{ env.DATE }} for ${{ env.RELEASE_TAG }}
           allowUpdates: true
           tag: ${{ env.RELEASE_TAG }}

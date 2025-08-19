@@ -1,5 +1,5 @@
 # 自动化构建 OpenWrt / ImmWrt / LibWrt 的工作流（含中文注释）
-name: AA.Copilot
+name: Auto_Build_ipq60xx.Copilot
 
 # 触发方式：手动、被调用、以及定时（每周四 16:00）
 on:
@@ -8,7 +8,7 @@ on:
   schedule:
     - cron: '0 16 * * 4'
 
-# 全局环境变量（UPLOAD_BIN_DIR 已改为 true，TAG 设为 ipq60xx）
+# 全局环境变量（UPLOAD_BIN_DIR 已改为 true，TAG 设为 ipq60xx.Copilot）
 env:
   TZ: Asia/Shanghai
   DIY_SCRIPT: scripts/Script.sh
@@ -16,7 +16,7 @@ env:
   MADS: false
   UPLOAD_BIN_DIR: true
   FIRMWARE_RELEASE: true
-  FIRMWARE_TAG: ipq60xx    # 固定 tag 为 ipq60xx（按要求）
+  FIRMWARE_TAG: ipq60xx.Copilot
 
 jobs:
   Build:
@@ -93,7 +93,6 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get -y update
-          # 基本构建依赖 + Go / FUSE / sqlite3 开发头文件（解决 Ultra 中 cgofuse 找不到 fuse.h 的问题）
           sudo apt-get -y install \
             build-essential asciidoc binutils bzip2 gawk gettext git \
             libncurses5-dev libssl-dev python3 python3-distutils rsync unzip zlib1g-dev subversion wget \
@@ -233,7 +232,7 @@ jobs:
           echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
           echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
 
-      - name: Collect & rename outputs（整理并重命名输出：移除指定子串并在 .bin 前添加 _${CONFIG_TYPE}）
+      - name: Collect & rename outputs（整理并重命名输出）
         if: steps.compile.outputs.status == 'success'
         working-directory: ${{ env.OPENWRT_PATH }}
         run: |
@@ -241,63 +240,83 @@ jobs:
           echo "生成 oplist.txt 列表..."
           ls -la > "${OPENWRT_PATH}/oplist.txt" || true
 
-          # 将 .config / buildinfo 重命名为 REPO_SHORT+CONFIG_TYPE.*
+          # 重命名 .config -> ${REPO_SHORT}_${CONFIG_TYPE}.config
           if [ -f "${OPENWRT_PATH}/.config" ]; then
-            mv -f "${OPENWRT_PATH}/.config" "${OPENWRT_PATH}/${REPO_SHORT}${CONFIG_TYPE}.config" || true
-          fi
-          if [ -f "${OPENWRT_PATH}/config.buildinfo" ]; then
-            mv -f "${OPENWRT_PATH}/config.buildinfo" "${OPENWRT_PATH}/${REPO_SHORT}${CONFIG_TYPE}.buildinfo" || true
+            mv -f "${OPENWRT_PATH}/.config" "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.config" || true
+            echo "Renamed .config -> ${REPO_SHORT}_${CONFIG_TYPE}.config"
           fi
 
-          # 打包所有 .ipk/.apk
+          # 重命名 config.buildinfo -> ${REPO_SHORT}_${CONFIG_TYPE}.buildinfo
+          if [ -f "${OPENWRT_PATH}/config.buildinfo" ]; then
+            mv -f "${OPENWRT_PATH}/config.buildinfo" "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.buildinfo" || true
+            echo "Renamed config.buildinfo -> ${REPO_SHORT}_${CONFIG_TYPE}.buildinfo"
+          fi
+
+          # 打包 ipk/apk 为 ${REPO_SHORT}_${CONFIG_TYPE}.Packages.tar.gz
           PKG_TMP=$(mktemp -d)
           find "${OPENWRT_PATH}" -type f \( -name '*.ipk' -o -name '*.apk' \) -print0 | xargs -0 -I{} cp --parents "{}" "$PKG_TMP" 2>/dev/null || true
           if [ "$(find "$PKG_TMP" -type f | wc -l)" -gt 0 ]; then
-            tar -C "$PKG_TMP" -czf "${OPENWRT_PATH}/${REPO_SHORT}${CONFIG_TYPE}.Packages.tar.gz" .
+            tar -C "$PKG_TMP" -czf "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.Packages.tar.gz" .
+            echo "Created packages tarball: ${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.Packages.tar.gz"
+          else
+            echo "未找到 ipk/apk 包，跳过打包。"
           fi
           rm -rf "$PKG_TMP" || true
 
-          # 重命名 .bin 文件规则：
-          # 1) 去掉文件名中的 -qualcommax-ipq60xx-jdcloud
-          # 2) 在原名 .bin 前添加 _${CONFIG_TYPE}
-          echo "重命名 .bin 固件文件：移除 '-qualcommax-ipq60xx-jdcloud' 并在末尾添加 _${CONFIG_TYPE}.bin"
+          # 仅对以特定前缀开头的固件名进行重命名，避免改动非固件 .bin
+          echo "重命名固件 .bin 文件：替换指定前缀为 ${REPO_SHORT} 并在末尾添加 _${CONFIG_TYPE}"
+          FW_TMP=$(mktemp -d)
+          rename_count=0
           find "${OPENWRT_PATH}" -type f -name '*.bin' -print0 | while IFS= read -r -d '' f; do
-            dir=$(dirname "$f")
             base=$(basename "$f" .bin)
-            # remove the unwanted substring anywhere in the name
-            newbase=$(echo "$base" | sed 's/-qualcommax-ipq60xx-jdcloud//g')
-            # avoid double-adding the config suffix
-            case "$newbase" in
-              *"_${CONFIG_TYPE}") ;;
-              *) newbase="${newbase}_${CONFIG_TYPE}" ;;
+            dir=$(dirname "$f")
+            matched=0
+            case "$base" in
+              immortalwrt-qualcommax-ipq60xx-jdcloud*)
+                rest=${base#immortalwrt-qualcommax-ipq60xx-jdcloud}
+                newbase="${REPO_SHORT}${rest}"
+                matched=1
+                ;;
+              libwrt-qualcommax-ipq60xx-jdcloud*)
+                rest=${base#libwrt-qualcommax-ipq60xx-jdcloud}
+                newbase="${REPO_SHORT}${rest}"
+                matched=1
+                ;;
+              openwrt-qualcommax-ipq60xx-jdcloud*)
+                rest=${base#openwrt-qualcommax-ipq60xx-jdcloud}
+                newbase="${REPO_SHORT}${rest}"
+                matched=1
+                ;;
+              *)
+                # 非目标前缀，跳过
+                ;;
             esac
-            newname="${dir}/${newbase}.bin"
-            if [ "$f" != "$newname" ]; then
-              mv -f "$f" "$newname" || true
-              echo "Renamed: $f -> $newname"
+
+            if [ "$matched" -eq 1 ]; then
+              # 确保不会重复添加后缀
+              case "$newbase" in
+                *"_${CONFIG_TYPE}") ;;
+                *) newbase="${newbase}_${CONFIG_TYPE}" ;;
+              esac
+              newname="${dir}/${newbase}.bin"
+              if [ "$f" != "$newname" ]; then
+                mv -f "$f" "$newname" || true
+                echo "Renamed: $f -> $newname"
+              fi
+              # 复制到临时目录以便打包（只复制文件名，不保留整个树）
+              cp -f "${newname}" "${FW_TMP}/" || true
+              rename_count=$((rename_count+1))
             fi
           done
 
-          # 确定固件路径（优先 bin 目录），并打包固件到单个 tar.gz（避免向 Release 上传目录）
-          if find "${OPENWRT_PATH}/bin" -type f -name '*.bin' | grep -q .; then
-            FIRMWARE_TOP=$(find "${OPENWRT_PATH}/bin" -type f -name '*.bin' -print0 | xargs -0 -n1 dirname | sort -u | head -n1)
-            echo "FIRMWARE_PATH=$FIRMWARE_TOP" >> $GITHUB_ENV
-          else
-            echo "FIRMWARE_PATH=${OPENWRT_PATH}/bin" >> $GITHUB_ENV
-          fi
+          echo "Renamed $rename_count firmware files (copied to $FW_TMP for packaging)."
 
-          # 将固件复制到临时目录打包，避免目录上传错误（Artifact is a directory）
-          FW_TMP=$(mktemp -d)
-          if [ -n "${FIRMWARE_PATH:-}" ] && [ -d "${FIRMWARE_PATH}" ]; then
-            find "${FIRMWARE_PATH}" -type f -name '*.bin' -print0 | xargs -0 -I{} cp --parents "{}" "$FW_TMP" 2>/dev/null || true
-            if [ "$(find "$FW_TMP" -type f | wc -l)" -gt 0 ]; then
-              tar -C "$FW_TMP" -czf "${OPENWRT_PATH}/${REPO_SHORT}${CONFIG_TYPE}.firmware.tar.gz" .
-              echo "Created firmware tarball: ${OPENWRT_PATH}/${REPO_SHORT}${CONFIG_TYPE}.firmware.tar.gz"
-            else
-              echo "Warning: 未找到需打包的固件文件"
-            fi
+          # 生成固件 tar 包，命名为 ${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz
+          if [ "$(ls -A "$FW_TMP" 2>/dev/null || true)" ]; then
+            tar -C "$FW_TMP" -czf "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz" .
+            echo "Created firmware tarball: ${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz"
           else
-            echo "Warning: FIRMWARE_PATH 未定义或不存在: ${FIRMWARE_PATH:-<unset>}"
+            echo "Warning: 未在 $FW_TMP 中找到任何重命名后的固件文件，固件包未创建。请检查重命名匹配规则。"
           fi
           rm -rf "$FW_TMP" || true
 
@@ -308,10 +327,10 @@ jobs:
           name: ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-artifacts
           path: |
             ${{ env.OPENWRT_PATH }}/oplist.txt
-            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.config
-            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.buildinfo
-            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.Packages.tar.gz
-            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.firmware.tar.gz
+            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config
+            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.buildinfo
+            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.Packages.tar.gz
+            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.firmware.tar.gz
 
       - name: Upload Firmware To Release（如启用则创建/更新 Release 并上传固件）
         if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
@@ -321,7 +340,7 @@ jobs:
           allowUpdates: true
           tag: ${{ env.FIRMWARE_TAG }}
           token: ${{ secrets.GITHUB_TOKEN }}
-          artifacts: ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.firmware.tar.gz
+          artifacts: ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.firmware.tar.gz
           body: |
             **This is OpenWrt Firmware (TAG: ${{ env.FIRMWARE_TAG }})**
             - 源码仓库: ${{ env.REPO_URL }}

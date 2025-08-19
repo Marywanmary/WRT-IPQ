@@ -8,7 +8,7 @@ on:
   schedule:
     - cron: '0 16 * * 4'
 
-# 全局环境变量（UPLOAD_BIN_DIR 已改为 true）
+# 全局环境变量（UPLOAD_BIN_DIR 已改为 true，TAG 设为 ipq60xx）
 env:
   TZ: Asia/Shanghai
   DIY_SCRIPT: scripts/Script.sh
@@ -16,9 +16,9 @@ env:
   MADS: false
   UPLOAD_BIN_DIR: true
   FIRMWARE_RELEASE: true
+  FIRMWARE_TAG: ipq60xx    # 固定 tag 为 ipq60xx（按要求）
 
 jobs:
-  # job 层可以引用 matrix，因而把 run-name 放到 job 的 name 字段
   Build:
     name: "Build ${{ matrix.REPO_SHORT }} - ${{ matrix.CONFIG_TYPE }} (branch: ${{ matrix.branch }})"
     runs-on: ubuntu-22.04
@@ -87,16 +87,22 @@ jobs:
           free -h || true
           df -h || true
 
-      - name: 初始化环境（安装依赖）
+      - name: 初始化环境（安装依赖：包含构建需要的系统库，例如 fuse.h）
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
+          set -euo pipefail
           sudo apt-get -y update
-          sudo apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libssl-dev python3 python3-distutils rsync unzip zlib1g-dev subversion wget || true
+          # 基本构建依赖 + Go / FUSE / sqlite3 开发头文件（解决 Ultra 中 cgofuse 找不到 fuse.h 的问题）
+          sudo apt-get -y install \
+            build-essential asciidoc binutils bzip2 gawk gettext git \
+            libncurses5-dev libssl-dev python3 python3-distutils rsync unzip zlib1g-dev subversion wget \
+            pkg-config libfuse-dev libfuse3-dev libsqlite3-dev || true
           sudo timedatectl set-timezone "$TZ" || true
 
       - name: Clone Source Code（克隆目标源码）
         run: |
+          set -euo pipefail
           sudo mkdir -p "${OPENWRT_PATH}"
           sudo chown -R $(id -u):$(id -g) "${OPENWRT_PATH}"
           git clone --depth 1 -b "${REPO_BRANCH}" --single-branch "${REPO_URL}" "${OPENWRT_PATH}"
@@ -105,7 +111,7 @@ jobs:
           VERSION_INFO=$(git show -s --date=short --format="作者: %an | 时间: %cd | 内容: %s | hash: %H" || true)
           echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
 
-      - name: Prepare .config by merging config fragments（合并 .config 片段，支持带/不带 .config 后缀）
+      - name: Prepare .config by merging config fragments（支持片段带/不带 .config 后缀）
         working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
@@ -120,7 +126,6 @@ jobs:
             exit 1
           fi
 
-          # 辅助函数：接受 fragment 基名（不含扩展名），按两种候选名查找并追加（支持 xxx 和 xxx.config）
           append_fragment() {
             local base="$1"
             local found=0
@@ -138,7 +143,6 @@ jobs:
             fi
           }
 
-          # 基本顺序：General + ipq60xx + (Pro/Max/(Max+Ultra)) [+ LibWrt if LibWrt 仓库]
           append_fragment "General"
           append_fragment "ipq60xx"
 
@@ -147,7 +151,6 @@ jobs:
           elif [ "$CONFIG_TYPE" = "Max" ]; then
             append_fragment "Max"
           elif [ "$CONFIG_TYPE" = "Ultra" ]; then
-            # Ultra 使用 Max + Ultra
             append_fragment "Max"
             append_fragment "Ultra"
           else
@@ -166,12 +169,6 @@ jobs:
             echo "注意：合并后未生成 $TARGET（未找到任何 fragment），请检查 configs/ 目录及文件名是否正确。"
             exit 1
           fi
-         
-      - name: Load Custom Configuration(加载自定义配置)
-        run: |
-          chmod +x $GITHUB_WORKSPACE/scripts/Script.sh
-          cd $OPENWRT_PATH
-          $GITHUB_WORKSPACE/scripts/Script.sh
 
       - name: Generate Variables（生成额外变量）
         run: |
@@ -203,6 +200,16 @@ jobs:
           ./scripts/feeds update -a || true
           ./scripts/feeds install -a || true
 
+      - name: Run DIY script if present（如有自定义脚本则执行）
+        run: |
+          if [ -f "${{ github.workspace }}/$DIY_SCRIPT" ]; then
+            chmod +x "${{ github.workspace }}/$DIY_SCRIPT" || true
+            cd "${OPENWRT_PATH}"
+            "${{ github.workspace }}/$DIY_SCRIPT" || true
+          else
+            echo "未检测到自定义脚本，跳过。"
+          fi
+
       - name: Download DL Package（make download）
         run: |
           cd "${OPENWRT_PATH}"
@@ -226,21 +233,23 @@ jobs:
           echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
           echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
 
-      - name: Collect & rename outputs（整理并重命名输出）
+      - name: Collect & rename outputs（整理并重命名输出：移除指定子串并在 .bin 前添加 _${CONFIG_TYPE}）
         if: steps.compile.outputs.status == 'success'
         working-directory: ${{ env.OPENWRT_PATH }}
         run: |
           set -euo pipefail
+          echo "生成 oplist.txt 列表..."
           ls -la > "${OPENWRT_PATH}/oplist.txt" || true
 
+          # 将 .config / buildinfo 重命名为 REPO_SHORT+CONFIG_TYPE.*
           if [ -f "${OPENWRT_PATH}/.config" ]; then
             mv -f "${OPENWRT_PATH}/.config" "${OPENWRT_PATH}/${REPO_SHORT}${CONFIG_TYPE}.config" || true
           fi
-
           if [ -f "${OPENWRT_PATH}/config.buildinfo" ]; then
             mv -f "${OPENWRT_PATH}/config.buildinfo" "${OPENWRT_PATH}/${REPO_SHORT}${CONFIG_TYPE}.buildinfo" || true
           fi
 
+          # 打包所有 .ipk/.apk
           PKG_TMP=$(mktemp -d)
           find "${OPENWRT_PATH}" -type f \( -name '*.ipk' -o -name '*.apk' \) -print0 | xargs -0 -I{} cp --parents "{}" "$PKG_TMP" 2>/dev/null || true
           if [ "$(find "$PKG_TMP" -type f | wc -l)" -gt 0 ]; then
@@ -248,16 +257,28 @@ jobs:
           fi
           rm -rf "$PKG_TMP" || true
 
+          # 重命名 .bin 文件规则：
+          # 1) 去掉文件名中的 -qualcommax-ipq60xx-jdcloud
+          # 2) 在原名 .bin 前添加 _${CONFIG_TYPE}
+          echo "重命名 .bin 固件文件：移除 '-qualcommax-ipq60xx-jdcloud' 并在末尾添加 _${CONFIG_TYPE}.bin"
           find "${OPENWRT_PATH}" -type f -name '*.bin' -print0 | while IFS= read -r -d '' f; do
             dir=$(dirname "$f")
             base=$(basename "$f" .bin)
-            case "$base" in
-              ${REPO_SHORT}${CONFIG_TYPE}*) echo "已包含前缀，跳过：$f"; continue ;;
+            # remove the unwanted substring anywhere in the name
+            newbase=$(echo "$base" | sed 's/-qualcommax-ipq60xx-jdcloud//g')
+            # avoid double-adding the config suffix
+            case "$newbase" in
+              *"_${CONFIG_TYPE}") ;;
+              *) newbase="${newbase}_${CONFIG_TYPE}" ;;
             esac
-            newname="${dir}/${REPO_SHORT}${CONFIG_TYPE}${base}.bin"
-            mv -f "$f" "$newname" || true
+            newname="${dir}/${newbase}.bin"
+            if [ "$f" != "$newname" ]; then
+              mv -f "$f" "$newname" || true
+              echo "Renamed: $f -> $newname"
+            fi
           done
 
+          # 确定固件路径（优先 bin 目录），并打包固件到单个 tar.gz（避免向 Release 上传目录）
           if find "${OPENWRT_PATH}/bin" -type f -name '*.bin' | grep -q .; then
             FIRMWARE_TOP=$(find "${OPENWRT_PATH}/bin" -type f -name '*.bin' -print0 | xargs -0 -n1 dirname | sort -u | head -n1)
             echo "FIRMWARE_PATH=$FIRMWARE_TOP" >> $GITHUB_ENV
@@ -265,12 +286,20 @@ jobs:
             echo "FIRMWARE_PATH=${OPENWRT_PATH}/bin" >> $GITHUB_ENV
           fi
 
-          if [ -z "${FILE_DATE:-}" ]; then
-            FILE_DATE=$(date +"%Y.%m.%d")
-            echo "FILE_DATE=$FILE_DATE" >> $GITHUB_ENV
+          # 将固件复制到临时目录打包，避免目录上传错误（Artifact is a directory）
+          FW_TMP=$(mktemp -d)
+          if [ -n "${FIRMWARE_PATH:-}" ] && [ -d "${FIRMWARE_PATH}" ]; then
+            find "${FIRMWARE_PATH}" -type f -name '*.bin' -print0 | xargs -0 -I{} cp --parents "{}" "$FW_TMP" 2>/dev/null || true
+            if [ "$(find "$FW_TMP" -type f | wc -l)" -gt 0 ]; then
+              tar -C "$FW_TMP" -czf "${OPENWRT_PATH}/${REPO_SHORT}${CONFIG_TYPE}.firmware.tar.gz" .
+              echo "Created firmware tarball: ${OPENWRT_PATH}/${REPO_SHORT}${CONFIG_TYPE}.firmware.tar.gz"
+            else
+              echo "Warning: 未找到需打包的固件文件"
+            fi
+          else
+            echo "Warning: FIRMWARE_PATH 未定义或不存在: ${FIRMWARE_PATH:-<unset>}"
           fi
-          RELEASE_TAG="${REPO_SHORT}-${CONFIG_TYPE}-${FILE_DATE}"
-          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+          rm -rf "$FW_TMP" || true
 
       - name: Upload artifacts（上传产物）
         if: steps.compile.outputs.status == 'success'
@@ -282,19 +311,19 @@ jobs:
             ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.config
             ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.buildinfo
             ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.Packages.tar.gz
-            ${{ env.FIRMWARE_PATH }}/**
+            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.firmware.tar.gz
 
       - name: Upload Firmware To Release（如启用则创建/更新 Release 并上传固件）
         if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
         uses: ncipollo/release-action@v1
         with:
-          name: ${{ env.DATE }} for ${{ env.RELEASE_TAG }}
+          name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
           allowUpdates: true
-          tag: ${{ env.RELEASE_TAG }}
+          tag: ${{ env.FIRMWARE_TAG }}
           token: ${{ secrets.GITHUB_TOKEN }}
-          artifacts: ${{ env.FIRMWARE_PATH }}/*
+          artifacts: ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.firmware.tar.gz
           body: |
-            **This is OpenWrt Firmware**
+            **This is OpenWrt Firmware (TAG: ${{ env.FIRMWARE_TAG }})**
             - 源码仓库: ${{ env.REPO_URL }}
             - 源码分支: ${{ env.REPO_BRANCH }}
             - 版本信息: ${{ env.VERSION_INFO }}

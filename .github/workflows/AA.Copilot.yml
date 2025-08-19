@@ -1,5 +1,5 @@
 # 自动化构建 OpenWrt / ImmWrt / LibWrt 的工作流（含中文注释）
-name: Auto_Build_ipq60xx.Copilot
+name: AA.Copilot
 
 # 触发方式：手动、被调用、以及定时（每周四 16:00）
 on:

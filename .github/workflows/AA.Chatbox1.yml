@@ -12,9 +12,8 @@ on:
 env:
   REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
   TZ: Asia/Shanghai
-  TAG: ipq60xx.Chatbox
-  UPLOAD_BIN_DIR: true
-  FIRMWARE_RELEASE: true
+  TAG: ipq60xx
+  UPLOAD_BIN_DIR: false
 
 jobs:
   build:
@@ -51,16 +50,14 @@ jobs:
         sudo timedatectl set-timezone "$TZ"
         
     - name: Free up disk space before build
-      uses: AdityaGarg8/remove-unwanted-software@master
-      with:
-        remove-dotnet: "true"
-        remove-android: "true"
-        remove-haskell: "true"
-        remove-codeql: "true"
-        remove-docker-images: "true"
-        remove-large-packages: "true"
-        remove-cached-tools: "true"
-        remove-swapfile: "true"
+      run: |
+        echo "Freeing up disk space..."
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo apt-get clean
+        docker system prune -a -f
+        sudo -E apt-get -y autoremove --purge
+        sudo -E apt-get -y clean
+        df -h
         
     - name: Check disk space
       run: |
@@ -150,121 +147,4 @@ jobs:
       run: |
         df -h
         AVAILABLE_SPACE=$(df -BG --output=avail . | tail -1 | tr -d 'G ')
-        echo "Available space before download: ${AVAILABLE_SPACE}GB"
-        if [ "$AVAILABLE_SPACE" -lt 25 ]; then
-          echo "Cleaning up before download..."
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo apt-get clean
-          docker system prune -a -f
-          df -h
-        fi
-        
-    - name: Download package sources
-      run: |
-        cd $OPENWRT_PATH
-        make download -j$(nproc)
-        
-    - name: Free up disk space before compilation
-      run: |
-        df -h
-        AVAILABLE_SPACE=$(df -BG --output=avail . | tail -1 | tr -d 'G ')
-        echo "Available space before compilation: ${AVAILABLE_SPACE}GB"
-        if [ "$AVAILABLE_SPACE" -lt 30 ]; then
-          echo "Cleaning up before compilation..."
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo apt-get clean
-          docker system prune -a -f
-          # 清理不必要的下载缓存
-          find $OPENWRT_PATH/dl -type f -name "*.tar.*" -exec rm -f {} \;
-          df -h
-        fi
-        
-    - name: Compile firmware
-      run: |
-        cd $OPENWRT_PATH
-        make -j$(nproc) || make -j1 V=s
-        
-        # 如果编译失败，收集日志
-        if [ $? -ne 0 ]; then
-          echo "Compilation failed, collecting logs..."
-          find . -name "*.log" -type f | xargs tar -czf compile_logs.tar.gz
-          echo "::error::Compilation failed. Check compile_logs.tar.gz for details."
-          exit 1
-        fi
-        
-    - name: Organize files
-      run: |
-        cd $OPENWRT_PATH
-        
-        # Rename .config file
-        mv .config ${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config || true
-        
-        # Rename config.buildinfo
-        [ -f config.buildinfo ] && mv config.buildinfo ${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.buildinfo || true
-        
-        # Package ipk/apk files
-        if [ -d bin/targets/*/packages ]; then
-          tar -zcf ${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.Packages.tar.gz -C bin/targets/*/packages .
-        fi
-        
-        # Rename .bin files with new naming convention
-        if [ -d bin/targets ]; then
-          find bin/targets -name "*.bin" -type f -print0 | while IFS= read -r -d '' bin_file; do
-            dir=$(dirname "$bin_file")
-            filename=$(basename "$bin_file")
-            
-            # 根据不同的前缀进行替换
-            if [[ "$filename" == openwrt-qualcommax-ipq60xx-jdcloud* ]]; then
-              new_filename="${filename/openwrt-qualcommax-ipq60xx-jdcloud/OpenWrt}"
-            elif [[ "$filename" == libwrt-qualcommax-ipq60xx-jdcloud* ]]; then
-              new_filename="${filename/libwrt-qualcommax-ipq60xx-jdcloud/LibWrt}"
-            elif [[ "$filename" == immortalwrt-qualcommax-ipq60xx-jdcloud* ]]; then
-              new_filename="${filename/immortalwrt-qualcommax-ipq60xx-jdcloud/ImmWrt}"
-            else
-              new_filename="$filename"
-            fi
-            
-            # 在.bin前添加_CONFIG_TYPE
-            if [[ "$new_filename" == *.bin ]]; then
-              new_filename="${new_filename%.bin}_${{ matrix.CONFIG_TYPE }}.bin"
-            fi
-            
-            mv "$bin_file" "$dir/$new_filename"
-          done
-        fi
-        
-    - name: Upload artifacts
-      uses: actions/upload-artifact@main
-      with:
-        name: ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-firmware
-        path: |
-          ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config
-          ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.buildinfo
-          ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.Packages.tar.gz
-          ${{ env.OPENWRT_PATH }}/bin/targets/
-          ${{ env.OPENWRT_PATH }}/oplist.txt
-          ${{ env.OPENWRT_PATH }}/compile_logs.tar.gz
-        retention-days: 30
-
-    # 新增：上传到Release的步骤
-    - name: Get current date
-      id: date
-      run: echo "::set-output name=date::$(date +'%Y-%m-%d %H:%M:%S')"
-
-    - name: Upload to Release
-      if: env.FIRMWARE_RELEASE == 'true'
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ env.TAG }}
-        name: Firmware Release ${{ env.TAG }}
-        body: |
-          Firmware for ${{ matrix.REPO_SHORT }} ${{ matrix.CONFIG_TYPE }} configuration
-          Build date: ${{ steps.date.outputs.date }}
-          Commit: ${{ github.sha }}
-        files: |
-          ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config
-          ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.buildinfo
-          ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.Packages.tar.gz
-          ${{ env.OPENWRT_PATH }}/bin/targets/**/*.bin
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+       

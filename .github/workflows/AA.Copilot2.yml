@@ -1,0 +1,267 @@
+name: Auto_Build_ipq60xx.Copilot2
+
+# 触发方式：手动、被调用、以及定时（每周四 16:00）
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: '0 16 * * 4'
+
+# 全局环境变量（UPLOAD_BIN_DIR 已改为 true，TAG 设为 ipq60xx.Copilot）
+env:
+  TZ: Asia/Shanghai
+  DIY_SCRIPT: scripts/Script.sh
+  CLASH_KERNEL: amd64
+  MADS: false
+  UPLOAD_BIN_DIR: true
+  FIRMWARE_RELEASE: true
+  FIRMWARE_TAG: ipq60xx.Copilot
+
+jobs:
+  Build:
+    name: "Build ${{ matrix.REPO_SHORT }} - ${{ matrix.CONFIG_TYPE }} (branch: ${{ matrix.branch }})"
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - REPO_SHORT: 'ImmWrt'
+            url: 'https://github.com/laipeng668/immortalwrt.git'
+            branch: 'master'
+            CONFIG_TYPE: 'Pro'
+          - REPO_SHORT: 'ImmWrt'
+            url: 'https://github.com/laipeng668/immortalwrt.git'
+            branch: 'master'
+            CONFIG_TYPE: 'Max'
+          - REPO_SHORT: 'ImmWrt'
+            url: 'https://github.com/laipeng668/immortalwrt.git'
+            branch: 'master'
+            CONFIG_TYPE: 'Ultra'
+          - REPO_SHORT: 'OpenWrt'
+            url: 'https://github.com/laipeng668/openwrt.git'
+            branch: 'master'
+            CONFIG_TYPE: 'Pro'
+          - REPO_SHORT: 'OpenWrt'
+            url: 'https://github.com/laipeng668/openwrt.git'
+            branch: 'master'
+            CONFIG_TYPE: 'Max'
+          - REPO_SHORT: 'OpenWrt'
+            url: 'https://github.com/laipeng668/openwrt.git'
+            branch: 'master'
+            CONFIG_TYPE: 'Ultra'
+          - REPO_SHORT: 'LibWrt'
+            url: 'https://github.com/laipeng668/openwrt-6.x.git'
+            branch: 'k6.12-nss'
+            CONFIG_TYPE: 'Pro'
+          - REPO_SHORT: 'LibWrt'
+            url: 'https://github.com/laipeng668/openwrt-6.x.git'
+            branch: 'k6.12-nss'
+            CONFIG_TYPE: 'Max'
+          - REPO_SHORT: 'LibWrt'
+            url: 'https://github.com/laipeng668/openwrt-6.x.git'
+            branch: 'k6.12-nss'
+            CONFIG_TYPE: 'Ultra'
+
+    env:
+      REPO_URL: ${{ matrix.url }}
+      REPO_BRANCH: ${{ matrix.branch }}
+      REPO_SHORT: ${{ matrix.REPO_SHORT }}
+      CONFIG_TYPE: ${{ matrix.CONFIG_TYPE }}
+      OPENWRT_PATH: /mnt/openwrt
+      FRAG_DIR: configs
+      GENERAL_FRAGMENT: configs/General
+      IPQ_FRAGMENT: configs/ipq60xx
+      LIBWRT_FRAGMENT: configs/LibWrt
+
+    steps:
+      - name: Checkout workflow repository（检出当前仓库以获取 configs 和脚本）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 检查服务器性能（提示）
+        run: |
+          echo "开始检查服务器信息..."
+          grep -m1 'model name' /proc/cpuinfo || true
+          free -h || true
+          df -h || true
+
+      - name: 初始化环境（安装依赖：包含构建需要的系统库，例如 fuse.h）
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -euo pipefail
+          sudo apt-get -y update
+          sudo apt-get -y install \
+            build-essential asciidoc binutils bzip2 gawk gettext git \
+            libncurses5-dev libssl-dev python3 python3-distutils rsync unzip zlib1g-dev subversion wget \
+            pkg-config libfuse-dev libfuse3-dev libsqlite3-dev || true
+          sudo timedatectl set-timezone "$TZ" || true
+
+      - name: Clone Source Code（克隆目标源码）
+        run: |
+          set -euo pipefail
+          sudo mkdir -p "${OPENWRT_PATH}"
+          sudo chown -R $(id -u):$(id -g) "${OPENWRT_PATH}"
+          git clone --depth 1 -b "${REPO_BRANCH}" --single-branch "${REPO_URL}" "${OPENWRT_PATH}"
+          cd "${OPENWRT_PATH}"
+          echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+          VERSION_INFO=$(git show -s --date=short --format="作者: %an | 时间: %cd | 内容: %s | hash: %H" || true)
+          echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
+
+      - name: Prepare .config by merging config fragments（支持片段带/不带 .config 后缀）
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          CFGDIR="${{ github.workspace }}/${FRAG_DIR}"
+          TARGET="${OPENWRT_PATH}/.config"
+          rm -f "$TARGET"
+
+          echo "准备合并 fragments: REPO_SHORT=${REPO_SHORT}, CONFIG_TYPE=${CONFIG_TYPE}"
+          if [ ! -d "$CFGDIR" ]; then
+            echo "错误：configs/ 目录未找到，请在仓库根目录创建 configs/ 并包含 General(.config), ipq60xx(.config), Pro(.config), Max(.config), Ultra(.config), LibWrt(.config)（如需）"
+            ls -la || true
+            exit 1
+          fi
+
+          append_fragment() {
+            local base="$1"
+            local found=0
+            for cand in "$CFGDIR/$base" "$CFGDIR/$base.config"; do
+              if [ -f "$cand" ]; then
+                echo "Appending fragment: $cand"
+                cat "$cand" >> "$TARGET"
+                echo -e "\n# --- appended $cand ---\n" >> "$TARGET"
+                found=1
+                break
+              fi
+            done
+            if [ $found -eq 0 ]; then
+              echo "Warning: fragment for '$base' not found (tried: $CFGDIR/$base, $CFGDIR/$base.config)"
+            fi
+          }
+
+          append_fragment "General"
+          append_fragment "ipq60xx"
+
+          if [ "$CONFIG_TYPE" = "Pro" ]; then
+            append_fragment "Pro"
+          elif [ "$CONFIG_TYPE" = "Max" ]; then
+            append_fragment "Max"
+          elif [ "$CONFIG_TYPE" = "Ultra" ]; then
+            append_fragment "Max"
+            append_fragment "Ultra"
+          else
+            echo "未知的 CONFIG_TYPE: $CONFIG_TYPE"
+            exit 1
+          fi
+
+          if [ "$REPO_SHORT" = "LibWrt" ]; then
+            append_fragment "LibWrt"
+          fi
+
+          echo "合并完成，预览 .config（前200行）："
+          if [ -f "$TARGET" ]; then
+            sed -n '1,200p' "$TARGET" || true
+          else
+            echo "注意：合并后未生成 $TARGET（未找到任何 fragment），请检查 configs/ 目录及文件名是否正确。"
+            exit 1
+          fi
+
+      - name: Generate Variables（生成额外变量）
+        run: |
+          set -euo pipefail
+          cd "${OPENWRT_PATH}"
+          make defconfig >/dev/null 2>&1 || true
+          SOURCE_REPO="$(basename ${REPO_URL})"
+          echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+          DEVICE_TARGET=$(grep -m1 CONFIG_TARGET_BOARD .config | awk -F '"' '{print $2}' || true)
+          echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
+          DEVICE_SUBTARGET=$(grep -m1 CONFIG_TARGET_SUBTARGET .config | awk -F '"' '{print $2}' || true)
+          echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
+          HASH=$(git -C . rev-parse --short HEAD 2>/dev/null || true)
+          echo "HASH=$HASH" >> $GITHUB_ENV
+          echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+
+      - name: Cache Toolchain（缓存编译工具链）
+        uses: actions/cache@v4
+        with:
+          key: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
+          restore-keys: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
+          path: |
+            ${{ env.OPENWRT_PATH }}/.ccache
+            ${{ env.OPENWRT_PATH }}/staging_dir
+
+      - name: Install Feeds（更新并安装 feeds）
+        run: |
+          cd "${OPENWRT_PATH}"
+          ./scripts/feeds update -a || true
+          ./scripts/feeds install -a || true
+
+      - name: Run DIY script if present（如有自定义脚本则执行）
+        run: |
+          if [ -f "${{ github.workspace }}/$DIY_SCRIPT" ]; then
+            chmod +x "${{ github.workspace }}/$DIY_SCRIPT" || true
+            cd "${OPENWRT_PATH}"
+            "${{ github.workspace }}/$DIY_SCRIPT" || true
+          else
+            echo "未检测到自定义脚本，跳过。"
+          fi
+
+      - name: Download DL Package（make download）
+        run: |
+          cd "${OPENWRT_PATH}"
+          make defconfig || true
+          make download -j$(nproc) || true
+          find dl -size -1024c -exec rm -f {} \; || true
+
+      - name: Compile Firmware（编译固件）
+        id: compile
+        run: |
+          set -euo pipefail
+          cd "${OPENWRT_PATH}"
+          echo "开始编译（使用 $(nproc) 个线程）"
+          if ! make -j$(nproc); then
+            echo "并行编译失败，尝试单线程编译并输出详细日志"
+            make -j1 V=s || true
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+          echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+
+      - name: Collect & rename outputs（整理并重命名输出）
+        if: steps.compile.outputs.status == 'success'
+        working-directory: ${{ env.OPENWRT_PATH }}
+        run: |
+          set -euo pipefail
+          echo "生成 oplist.txt 列表..."
+          ls -la > "${OPENWRT_PATH}/oplist.txt" || true
+
+          # 重命名 .config -> ${REPO_SHORT}_${CONFIG_TYPE}.config
+          if [ -f "${OPENWRT_PATH}/.config" ]; then
+            mv -f "${OPENWRT_PATH}/.config" "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.config" || true
+            echo "Renamed .config -> ${REPO_SHORT}_${CONFIG_TYPE}.config"
+          fi
+
+          # 重命名 config.buildinfo -> ${REPO_SHORT}_${CONFIG_TYPE}.buildinfo
+          if [ -f "${OPENWRT_PATH}/config.buildinfo" ]; then
+            mv -f "${OPENWRT_PATH}/config.buildinfo" "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.buildinfo" || true
+            echo "Renamed config.buildinfo -> ${REPO_SHORT}_${CONFIG_TYPE}.buildinfo"
+          fi
+
+          # 打包 ipk/apk 为 ${REPO_SHORT}_${CONFIG_TYPE}.Packages.tar.gz
+          PKG_TMP=$(mktemp -d)
+          find "${OPENWRT_PATH}" -type f \( -name '*.ipk' -o -name '*.apk' \) -print0 | xargs -0 -I{} cp --parents "{}" "$PKG_TMP" 2>/dev/null || true
+          if [ "$(find "$PKG_TMP" -type f | wc -l)" -gt 0 ]; then
+            tar -C "$PKG_TMP" -czf "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.Packages.tar.gz" .
+            echo "Created packages tarball: ${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.Packages.tar.gz"
+          else
+            echo "未找到 ipk/apk 包，跳过打包。"
+          fi
+          rm -rf "$PKG_TMP" || true
+
+          # 固件文件处理 - 重点修复部分
+          echo "开始处理固件文件..."
+          FW_TMP=$(mktemp -d

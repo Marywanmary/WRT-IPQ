@@ -1,4 +1,4 @@
-name: Auto_Build_ipq60xx.Chatz
+name: Auto_Build_ipq60xx.Chatz1
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ env:
   MAXIMIZE_DISK_SPACE: false
   UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true
-  FIRMWARE_TAG: ipq60xx.Chatz
+  FIRMWARE_TAG: ipq60xx
   CLASH_KERNEL: amd64
   
   # 缓存选项
@@ -134,6 +134,7 @@ jobs:
         echo "VERSION_KERNEL=$KERNEL_VERSION" >> $GITHUB_ENV
 
     - name: Cache Toolchain(缓存工具链)
+      id: cache-toolchain
       if: env.CACHE_CCACHE == 'true' || env.CACHE_STAGING_DIR == 'true'
       uses: actions/cache@main
       with:
@@ -245,6 +246,12 @@ jobs:
         echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
         echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        
+        # 验证配置文件中的关键软件包
+        echo "===== 验证配置文件 ====="
+        echo "启用的软件包数量：$(grep -c '^CONFIG_PACKAGE_=y' .config)"
+        echo "启用的luci-app数量：$(grep -c '^CONFIG_PACKAGE_luci-app_=y' .config)"
+        echo "===== 验证配置文件结束 ====="
 
     - name: Install Feeds(安装feeds)
       run: |
@@ -253,6 +260,11 @@ jobs:
         cd $OPENWRT_PATH
         ./scripts/feeds update -a
         ./scripts/feeds install -a
+        
+        # 验证feeds安装
+        echo "===== 验证feeds安装 ====="
+        echo "已安装的feeds软件包数量：$(find feeds -name "*.ipk" 2>/dev/null | wc -l)"
+        echo "===== 验证feeds安装结束 ====="
   
     - name: Load Custom Configuration(加载自定义配置)
       run: |
@@ -270,6 +282,11 @@ jobs:
           chmod +x "$DIY_SCRIPT"
           cd $OPENWRT_PATH
           "$DIY_SCRIPT"
+          
+          # 验证DIY脚本执行后的配置
+          echo "===== 验证DIY脚本执行 ====="
+          echo "DIY脚本执行后启用的软件包数量：$(grep -c '^CONFIG_PACKAGE_=y' .config)"
+          echo "===== 验证DIY脚本执行结束 ====="
         else
           echo "警告: DIY脚本不存在，跳过"
         fi
@@ -298,6 +315,11 @@ jobs:
         # 清理过小的文件
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
+        
+        # 验证下载的软件包
+        echo "===== 验证下载的软件包 ====="
+        echo "下载的软件包数量：$(find dl -type f | wc -l)"
+        echo "===== 验证下载的软件包结束 ====="
 
     - name: Compile Firmware(编译固件)
       id: compile
@@ -313,6 +335,24 @@ jobs:
         echo "status=success" >> $GITHUB_OUTPUT
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+        
+        # 验证编译结果
+        echo "===== 验证编译结果 ====="
+        echo "生成的固件文件："
+        find bin/targets -name "*.bin" -exec ls -lh {} \;
+        echo "生成的软件包数量：$(find bin/packages -name "*.ipk" 2>/dev/null | wc -l)"
+        echo "===== 验证编译结果结束 ====="
+
+    - name: Upload Debug Files(上传调试文件)
+      if: steps.compile.outputs.status == 'success'
+      uses: actions/upload-artifact@main
+      with:
+        name: debug-files-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
+        path: |
+          ${{ env.OPENWRT_PATH }}/.config
+          ${{ env.OPENWRT_PATH }}/bin/targets/*/config.buildinfo
+          ${{ env.OPENWRT_PATH }}/bin/targets/*/manifest
+        retention-days: 7
 
     - name: Check Space Usage(检查空间使用情况)
       if: (!cancelled())
@@ -413,8 +453,7 @@ jobs:
       with:
         name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
         allowUpdates: true
-        # tag: ${{ env.FIRMWARE_TAG }}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
-        tag: ${{ env.FIRMWARE_TAG }}
+        tag: ${{ env.FIRMWARE_TAG }}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
         token: ${{ secrets.GITHUB_TOKEN }}
         artifacts: ${{ env.FIRMWARE_PATH }}/*
         body: |

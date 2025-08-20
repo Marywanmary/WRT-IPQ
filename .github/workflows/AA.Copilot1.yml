@@ -124,6 +124,26 @@ jobs:
           echo "CXXFLAGS=$CXXFLAGS" >> $GITHUB_ENV
           echo "CPPFLAGS=$CPPFLAGS" >> $GITHUB_ENV
 
+      - name: Fix GCC Stack Smashing Issue(修复GCC栈溢出问题)
+        run: |
+          echo "设置栈大小和编译器标志以避免栈溢出"
+          # 增加栈大小限制
+          ulimit -s 32768
+          
+          # 设置GCC编译标志以避免栈溢出
+          export CFLAGS="$CFLAGS -fno-stack-protector -O1 -U_FORTIFY_SOURCE"
+          export CXXFLAGS="$CXXFLAGS -fno-stack-protector -O1 -U_FORTIFY_SOURCE"
+          export CPPFLAGS="$CPPFLAGS -fno-stack-protector -O1 -U_FORTIFY_SOURCE"
+          
+          # 更新环境变量
+          echo "CFLAGS=$CFLAGS" >> $GITHUB_ENV
+          echo "CXXFLAGS=$CXXFLAGS" >> $GITHUB_ENV
+          echo "CPPFLAGS=$CPPFLAGS" >> $GITHUB_ENV
+          
+          echo "设置GCC编译器不优化特定函数"
+          export GCC_NO_OPTIMIZE="yes"
+          echo "GCC_NO_OPTIMIZE=$GCC_NO_OPTIMIZE" >> $GITHUB_ENV
+
       - name: Clone Source Code（克隆目标源码）
         run: |
           set -euo pipefail
@@ -247,6 +267,11 @@ jobs:
           set -euo pipefail
           cd "${OPENWRT_PATH}"
           echo "开始编译（使用 $(nproc) 个线程）"
+          
+          # 设置编译器选项以避免栈溢出
+          export TARGET_CFLAGS="$TARGET_CFLAGS -fno-stack-protector -O1 -U_FORTIFY_SOURCE"
+          export TARGET_CXXFLAGS="$TARGET_CXXFLAGS -fno-stack-protector -O1 -U_FORTIFY_SOURCE"
+          
           if ! make -j$(nproc); then
             echo "并行编译失败，尝试单线程编译并输出详细日志"
             make -j1 V=s || true

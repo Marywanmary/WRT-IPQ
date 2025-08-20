@@ -18,7 +18,7 @@ env:
   MAXIMIZE_DISK_SPACE: false
   UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true
-  FIRMWARE_TAG: ipq60xx
+  FIRMWARE_TAG: ipq60xx.Chatz
   CLASH_KERNEL: amd64
   
   # 缓存选项

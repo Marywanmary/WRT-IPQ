@@ -80,23 +80,42 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: 检查服务器性能（提示）
+      - name: Check Server Performance(检查服务器性能)
         run: |
-          echo "开始检查服务器信息..."
-          grep -m1 'model name' /proc/cpuinfo || true
-          free -h || true
-          df -h || true
+          echo "警告⚠"
+          echo "分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
+          echo -e "已知CPU型号（降序）：7763，8370C，8272CL，8171M，E5-2673 \n"
+          echo "--------------------------CPU信息--------------------------"
+          echo "CPU物理数量：$(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
+          echo -e "CPU核心信息：$(cat /proc/cpuinfo | grep 'model name' | cut -f2 -d: | uniq -c) \n"
+          echo "--------------------------内存信息--------------------------"
+          echo "已安装内存详细信息："
+          echo -e "$(sudo lshw -short -C memory | grep GiB) \n" || true
+          echo "--------------------------硬盘信息--------------------------"
+          echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT || true
 
-      - name: 初始化环境（安装依赖：包含构建需要的系统库，例如 fuse.h）
+      - name: Maximize Available Disk Space(最大化可用磁盘空间​)
+        if: env.MADS == 'true'
+        uses: AdityaGarg8/remove-unwanted-software@master
+        with:
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-docker-images: "true"
+          remove-large-packages: "true"
+          remove-cached-tools: "true"
+          remove-swapfile: "true"
+
+      - name: Initialization Environment(初始化环境)
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          set -euo pipefail
-          sudo apt-get -y update
-          sudo apt-get -y install \
-            build-essential asciidoc binutils bzip2 gawk gettext git \
-            libncurses5-dev libssl-dev python3 python3-distutils rsync unzip zlib1g-dev subversion wget \
-            pkg-config libfuse-dev libfuse3-dev libsqlite3-dev || true
+          sudo -E apt-get -y update
+          sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204) || true
+          sudo -E systemctl daemon-reload || true
+          sudo -E apt-get -y autoremove --purge || true
+          sudo -E apt-get -y clean || true
           sudo timedatectl set-timezone "$TZ" || true
 
       - name: Clone Source Code（克隆目标源码）
@@ -267,7 +286,7 @@ jobs:
           echo "重命名固件 .bin 文件：替换指定前缀为 ${REPO_SHORT} 并在末尾添加 _${CONFIG_TYPE}"
           FW_TMP=$(mktemp -d)
           rename_count=0
-          find "${OPENWRT_PATH}" -type f -name '*.bin' -print0 | while IFS= read -r -d '' f; do
+          while IFS= read -r -d '' f; do
             base=$(basename "$f" .bin)
             dir=$(dirname "$f")
             matched=0
@@ -303,11 +322,11 @@ jobs:
                 mv -f "$f" "$newname" || true
                 echo "Renamed: $f -> $newname"
               fi
-              # 复制到临时目录以便打包（只复制文件名，不保留整个树）
+              # 复制到临时目录以便打包（只复制文件，不保留目录结构）
               cp -f "${newname}" "${FW_TMP}/" || true
               rename_count=$((rename_count+1))
             fi
-          done
+          done < <(find "${OPENWRT_PATH}" -type f -name '*.bin' -print0)
 
           echo "Renamed $rename_count firmware files (copied to $FW_TMP for packaging)."
 

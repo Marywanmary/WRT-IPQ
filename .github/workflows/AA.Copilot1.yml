@@ -1,3 +1,4 @@
+# 自动化构建 OpenWrt / ImmWrt / LibWrt 的工作流（含中文注释）
 name: Auto_Build_ipq60xx.Copilot
 
 # 触发方式：手动、被调用、以及定时（每周四 16:00）
@@ -262,75 +263,60 @@ jobs:
           fi
           rm -rf "$PKG_TMP" || true
 
-          # 固件文件处理 - 重点修复部分
-          echo "开始处理固件文件..."
+          # 仅对以特定前缀开头的固件名进行重命名，避免改动非固件 .bin
+          echo "重命名固件 .bin 文件：替换指定前缀为 ${REPO_SHORT} 并在末尾添加 _${CONFIG_TYPE}"
           FW_TMP=$(mktemp -d)
           rename_count=0
-          
-          # 1. 首先查找所有.bin文件并打印调试信息
-          echo "查找所有.bin文件:"
-          find "${OPENWRT_PATH}" -type f -name '*.bin' | head -20 || echo "未找到任何.bin文件"
-          
-          # 2. 查找固件文件并重命名
-          # 使用更通用的匹配模式，不仅匹配特定前缀
-          find "${OPENWRT_PATH}" -type f -name '*.bin' | while read f; do
-            echo "处理文件: $f"
+          find "${OPENWRT_PATH}" -type f -name '*.bin' -print0 | while IFS= read -r -d '' f; do
             base=$(basename "$f" .bin)
             dir=$(dirname "$f")
-            newbase=""
-            
-            # 尝试匹配各种可能的固件命名模式
-            if [[ "$base" == *immortalwrt*ipq60xx* ]] || [[ "$base" == *openwrt*ipq60xx* ]] || [[ "$base" == *libwrt*ipq60xx* ]]; then
-              # 提取设备型号部分
-              if [[ "$base" == *jdcloud* ]]; then
-                # 提取jdcloud之后的部分
-                rest=${base#*jdcloud}
+            matched=0
+            case "$base" in
+              immortalwrt-qualcommax-ipq60xx-jdcloud*)
+                rest=${base#immortalwrt-qualcommax-ipq60xx-jdcloud}
                 newbase="${REPO_SHORT}${rest}"
-              else
-                # 如果没有jdcloud，直接使用整个文件名
-                newbase="${REPO_SHORT}_${base}"
-              fi
-              
-              # 添加配置类型后缀
-              if [[ "$newbase" != *"_${CONFIG_TYPE}" ]]; then
-                newbase="${newbase}_${CONFIG_TYPE}"
-              fi
-              
+                matched=1
+                ;;
+              libwrt-qualcommax-ipq60xx-jdcloud*)
+                rest=${base#libwrt-qualcommax-ipq60xx-jdcloud}
+                newbase="${REPO_SHORT}${rest}"
+                matched=1
+                ;;
+              openwrt-qualcommax-ipq60xx-jdcloud*)
+                rest=${base#openwrt-qualcommax-ipq60xx-jdcloud}
+                newbase="${REPO_SHORT}${rest}"
+                matched=1
+                ;;
+              *)
+                # 非目标前缀，跳过
+                ;;
+            esac
+
+            if [ "$matched" -eq 1 ]; then
+              # 确保不会重复添加后缀
+              case "$newbase" in
+                *"_${CONFIG_TYPE}") ;;
+                *) newbase="${newbase}_${CONFIG_TYPE}" ;;
+              esac
               newname="${dir}/${newbase}.bin"
-              echo "重命名: $f -> $newname"
-              
-              # 执行重命名
               if [ "$f" != "$newname" ]; then
                 mv -f "$f" "$newname" || true
+                echo "Renamed: $f -> $newname"
               fi
-              
-              # 复制到临时目录
-              if cp -f "${newname}" "${FW_TMP}/"; then
-                echo "成功复制: ${newname} 到 ${FW_TMP}/"
-                rename_count=$((rename_count+1))
-              else
-                echo "复制失败: ${newname} 到 ${FW_TMP}/"
-              fi
-            else
-              echo "跳过非目标文件: $f"
+              # 复制到临时目录以便打包（只复制文件名，不保留整个树）
+              cp -f "${newname}" "${FW_TMP}/" || true
+              rename_count=$((rename_count+1))
             fi
           done
-          
-          echo "共处理了 $rename_count 个固件文件"
-          
-          # 3. 生成固件 tar 包
+
+          echo "Renamed $rename_count firmware files (copied to $FW_TMP for packaging)."
+
+          # 生成固件 tar 包，命名为 ${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz
           if [ "$(ls -A "$FW_TMP" 2>/dev/null || true)" ]; then
-            echo "创建固件tar包，包含以下文件:"
-            ls -la "$FW_TMP"
             tar -C "$FW_TMP" -czf "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz" .
             echo "Created firmware tarball: ${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz"
-            
-            # 验证tar包内容
-            echo "验证tar包内容:"
-            tar -tzf "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz" | head -10
           else
-            echo "警告: 临时目录 $FW_TMP 为空，无法创建固件tar包"
-            ls -la "$FW_TMP" || echo "无法列出临时目录内容"
+            echo "Warning: 未在 $FW_TMP 中找到任何重命名后的固件文件，固件包未创建。请检查重命名匹配规则。"
           fi
           rm -rf "$FW_TMP" || true
 

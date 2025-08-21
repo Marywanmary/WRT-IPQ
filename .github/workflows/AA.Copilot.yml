@@ -10,12 +10,10 @@ env:
 
 jobs:
   build:
-    # show the specific branch and config in the run name
     name: Build ${{ matrix.repo.repo_short }}:${{ matrix.repo.repo_branch }} - ${{ matrix.config_type }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # three repo definitions (each contains short name, url and branch)
         repo:
           - repo_short: "ImmWrt"
             repo_url: "https://github.com/laipeng668/immortalwrt.git"
@@ -26,11 +24,9 @@ jobs:
           - repo_short: "LibWrt"
             repo_url: "https://github.com/laipeng668/openwrt-6.x.git"
             repo_branch: "k6.12-nss"
-        # three config types
         config_type: [ "Pro", "Max", "Ultra" ]
       fail-fast: false
 
-    # expose convenient env variables inside steps
     env:
       REPO_SHORT: ${{ matrix.repo.repo_short }}
       REPO_URL: ${{ matrix.repo.repo_url }}
@@ -58,6 +54,7 @@ jobs:
           echo "REPO_BRANCH=${REPO_BRANCH}"
           echo "CONFIG_TYPE=${CONFIG_TYPE}"
           echo "OPENWRT_PATH=${OPENWRT_PATH}"
+        shell: bash
 
       - name: Prepare .config (merge if LibWrt)
         run: |
@@ -67,63 +64,49 @@ jobs:
           echo "Using base config: ${CONFIG_SRC}"
           if [ "${REPO_SHORT}" = "LibWrt" ]; then
             echo "Merging ${CONFIG_SRC} + ${LIB_CONFIG} -> ${TARGET_CONFIG}"
-            # merge (append LibWrt config after base config)
             cat "${CONFIG_SRC}" > "${TARGET_CONFIG}"
             echo "" >> "${TARGET_CONFIG}"
             cat "${LIB_CONFIG}" >> "${TARGET_CONFIG}"
-            echo "Merged config contents (deduped):"
-            # show resulting config list (unique lines)
+            echo "Merged config list (unique non-comment lines):"
             grep -v '^#' "${TARGET_CONFIG}" | sed '/^\s*$/d' | sort -u || true
-            echo "Full merged .config:"
+            echo "Merged .config (first 200 lines):"
             sed -n '1,200p' "${TARGET_CONFIG}" || true
           else
             echo "Copying ${CONFIG_SRC} -> ${TARGET_CONFIG}"
             cp "${CONFIG_SRC}" "${TARGET_CONFIG}" || true
-            echo "Config contents:"
+            echo "Config contents (first 200 lines):"
             sed -n '1,200p' "${TARGET_CONFIG}" || true
           fi
         shell: bash
 
-      - name: (Optional) show first lines of feeds.conf and make menuconfig information
-        run: |
-          if [ -f "${OPENWRT_PATH}/feeds.conf" ]; then
-            echo "feeds.conf:"
-            sed -n '1,50p' "${OPENWRT_PATH}/feeds.conf"
-          fi
-
-      - name: Update feeds and prepare build (safe defaults)
+      - name: Update feeds and prepare build
         run: |
           set -e
           cd "${OPENWRT_PATH}"
-          # update feeds (if present)
           if [ -f scripts/feeds ]; then
             scripts/feeds update -a || true
             scripts/feeds install -a || true
           fi
         shell: bash
 
-      - name: Build OpenWrt (may take long — adjust as needed)
+      - name: Build OpenWrt
         run: |
           set -e
           cd "${OPENWRT_PATH}"
-          # Use .config prepared earlier. Run defconfig and build - keep tolerant to failures for CI demonstration.
           if [ -f .config ]; then
-            echo "Running make defconfig"
             make defconfig || true
           fi
-          echo "Starting make -j$(nproc)"
-          # the build may fail in CI runners; we continue to post-processing steps as requested
           make -j$(nproc) || true
         shell: bash
 
       - name: Generate oplist.txt (list of files and directories under OPENWRT_PATH)
         run: |
           ls -laR "${OPENWRT_PATH}" > "${WORKSPACE}/oplist.txt" || true
-          echo "===== oplist.txt ====="
+          echo "===== oplist.txt (first 200 lines) ====="
           sed -n '1,200p' "${WORKSPACE}/oplist.txt" || true
         shell: bash
 
-      - name: Rename/move .config to REPO_SHORT_CONFIG_TYPE.config (inside OPENWRT_PATH) and show it
+      - name: Rename/move .config to REPO_SHORT_CONFIG_TYPE.config and show it
         run: |
           SRC="${OPENWRT_PATH}/.config"
           DST="${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.config"
@@ -135,7 +118,7 @@ jobs:
           sed -n '1,200p' "${DST}" || true
         shell: bash
 
-      - name: Rename config.buildinfo to REPO_SHORT_CONFIGTYPE.buildinfo (inside OPENWRT_PATH)
+      - name: Rename config.buildinfo to REPO_SHORT_CONFIGTYPE.buildinfo
         run: |
           SRC="${OPENWRT_PATH}/config.buildinfo"
           DST="${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.buildinfo"
@@ -150,7 +133,6 @@ jobs:
           PKG_DIR="${WORKSPACE}/_packages_for_archive"
           mkdir -p "${PKG_DIR}"
           find "${OPENWRT_PATH}" -type f \( -name '*.ipk' -o -name '*.apk' \) -print0 | while IFS= read -r -d '' f; do
-            # preserve directory structure under PKG_DIR
             dest="${PKG_DIR}/$(dirname "${f#"${OPENWRT_PATH}/"}")"
             mkdir -p "${dest}"
             cp -a "${f}" "${dest}/" || true
@@ -216,7 +198,7 @@ jobs:
       - name: Upload ipq60xx.Packages.tar.gz
         uses: actions/upload-artifact@v4
         with:
-          name: "ipq60xx.Packages.tar.gz"
+          name: "ipq60xx.Packages.tar.gz.${{ matrix.repo.repo_short }}_${{ matrix.config_type }}"
           path: "${WORKSPACE}/ipq60xx.Packages.tar.gz"
 
       - name: Upload renamed firmware .bin files (if any)
@@ -231,4 +213,85 @@ jobs:
         run: |
           echo "Artifacts uploaded for ${REPO_SHORT}_${CONFIG_TYPE}"
           ls -la "${WORKSPACE}" || true
+        shell: bash
+
+  publish:
+    name: Create single Release and upload all artifacts
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set DATE for release name (UTC YYYY-MM-DD)
+        run: |
+          echo "DATE=$(date -u +%F)" >> $GITHUB_ENV
+          echo "DATE now set to $(date -u +%F)"
+        shell: bash
+
+      - name: Download all artifacts from this workflow run
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded_artifacts
+
+      - name: Prepare release_assets directory (flatten and collect)
+        run: |
+          set -e
+          ASSET_DIR="${{ github.workspace }}/release_assets"
+          rm -rf "${ASSET_DIR}"
+          mkdir -p "${ASSET_DIR}"
+          # Copy all files found under downloaded_artifacts into release_assets
+          # Prefix with artifact directory name to avoid name collisions
+          for ART in downloaded_artifacts/*; do
+            if [ -d "${ART}" ]; then
+              ARTNAME=$(basename "${ART}")
+              find "${ART}" -type f -print0 | while IFS= read -r -d '' f; do
+                BN=$(basename "${f}")
+                # Add artifact folder prefix to filename
+                cp -a "${f}" "${ASSET_DIR}/${ARTNAME}_${BN}" || true
+              done
+            fi
+          done
+          echo "Files staged to ${ASSET_DIR}:"
+          find "${ASSET_DIR}" -type f -print || true
+        shell: bash
+
+      - name: Build release body (markdown)
+        run: |
+          BODY="${{ github.workspace }}/release_body.md"
+          cat > "${BODY}" <<'EOF'
+**This is OpenWrt Firmware for $FIRMWARE_TAG**
+
+### 📒 固件信息
+- 这是开启全功能NSS的6.12内核固件，默认主题为Argon；该固件在ImmortalWrt的基础上，添加了额外的软件包cpufreq、ddns、ttyd、upnp、wolplus、samba4、vlmcsd、aria2、autoreboot、uhttpd、wifischedule、frps、frpc、diskman、hd-idle、banip、acme、arpbind、usb-printer、homeproxy、openlist、adguardhome、oaf、sqm、wireguard、watchcat、3cat（**Taiyi**额外增加了filebrowser、dockerman、gecoosac、lucky），并添加了若干工具，具体详见对应机型的config。
+- 🌐 默认地址: **192.168.2.1**
+- 🔑 默认密码: none
+- 🚀 WiFi名称: **Star**
+- 🔑 WiFi密码: 12345678
+
+### 📦 包含的文件（自动列出）
+EOF
+          # Append file list
+          for f in release_assets/*; do
+            echo "- $(basename "${f}")" >> "${BODY}"
+          done
+          echo ""
+          echo "Release body prepared at ${BODY}"
+        shell: bash
+
+      - name: Create single GitHub Release and upload assets
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.FIRMWARE_TAG }}-${{ env.DATE }}
+          name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
+          body_path: release_body.md
+          files: release_assets/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify release upload results (list release assets via REST)
+        run: |
+          TAG="${{ env.FIRMWARE_TAG }}-${{ env.DATE }}"
+          echo "Listing assets for release tag: ${TAG}"
+          curl -s -H "Authorization: token ${GITHUB_TOKEN}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}" | jq -r '.assets[]?.name' || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash

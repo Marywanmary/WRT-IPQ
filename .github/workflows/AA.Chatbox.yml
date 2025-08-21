@@ -1,4 +1,4 @@
-name: AA.Chatbox
+name: ipq60xx.Chatbox
 
 on:
   workflow_dispatch:
@@ -73,7 +73,7 @@ jobs:
 
     - name: Generate Variables(生成变量)
       run: |
-        cp configs/ipq60xx_${{ matrix.CONFIG_TYPE }}.config $OPENWRT_PATH/.config
+        cp $GITHUB_WORKSPACE/configs/ipq60xx_${{ matrix.CONFIG_TYPE }}.config $OPENWRT_PATH/.config
         cd $OPENWRT_PATH
         make defconfig > /dev/null 2>&1
         SOURCE_REPO="$(echo ${{ matrix.REPO_URL }} | awk -F '/' '{print $(NF)}')"
@@ -89,7 +89,7 @@ jobs:
       if: matrix.REPO_SHORT == 'LibWrt'
       run: |
         cd $OPENWRT_PATH
-        cat configs/ipq60xx_${{ matrix.CONFIG_TYPE }}.config configs/LibWrt.config > .config
+        cat $GITHUB_WORKSPACE/configs/ipq60xx_${{ matrix.CONFIG_TYPE }}.config $GITHUB_WORKSPACE/configs/LibWrt.config > .config
         make defconfig > /dev/null 2>&1
         echo "合并后的配置文件内容："
         cat .config

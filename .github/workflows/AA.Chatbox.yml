@@ -1,4 +1,4 @@
-name: ipq60xx.Chatbox
+name: AA.Chatbox
 
 on:
   workflow_dispatch:

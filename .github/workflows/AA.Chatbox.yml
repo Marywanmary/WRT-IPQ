@@ -1,4 +1,4 @@
-name: AA.Chatbox
+name: ipq60xx.Chatbox
 
 on:
   workflow_dispatch:
@@ -140,6 +140,7 @@ jobs:
         echo "status=success" >> $GITHUB_OUTPUT
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+        echo "UNIQUE_ID=$(date +"%H%M%S")" >> $GITHUB_ENV
 
     - name: Check Space Usage(检查空间使用情况)
       if: (!cancelled())
@@ -166,8 +167,8 @@ jobs:
         echo "重命名配置文件: ${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config"
         
         # 重命名buildinfo文件
-        mv config.buildinfo ${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.buildinfo || true
-        echo "重命名buildinfo文件: ${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.buildinfo"
+        mv config.buildinfo ${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.buildinfo || true
+        echo "重命名buildinfo文件: ${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.buildinfo"
         
         # 打包ipk和apk包
         mkdir -p packages
@@ -179,8 +180,10 @@ jobs:
         # 重命名固件文件
         for file in *.bin; do
           if [ -f "$file" ]; then
-            mv "$file" "${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}_${file}"
-            echo "重命名固件文件: ${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}_${file}"
+            # 使用sed替换文件名中的"immortalwrt"为"ImmWrt-Pro"
+            new_name=$(echo "$file" | sed "s/immortalwrt/${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}/g")
+            mv "$file" "$new_name"
+            echo "重命名固件文件: $file -> $new_name"
           fi
         done
         
@@ -190,13 +193,13 @@ jobs:
       if: steps.compile.outputs.status == 'success'
       uses: actions/upload-artifact@main
       with:
-        name: ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-artifacts
+        name: ipq60xx-Packages-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-${{ env.FILE_DATE }}-${{ env.UNIQUE_ID }}
         path: |
           ${{ env.OPENWRT_PATH }}/oplist.txt
           ${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config
-          ${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.buildinfo
+          ${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.buildinfo
           ipq60xx.Packages.tar.gz
-          ${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}_*.bin
+          ${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}_*.bin
 
     - name: Upload Firmware To Release(发布固件)
       if: steps.compile.outputs.status == 'success'

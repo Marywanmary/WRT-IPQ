@@ -1,20 +1,16 @@
-name: AA.Chatz
+name: AA.ChatZ
 
 on:
   workflow_dispatch:
   workflow_call:
-  schedule:
-    - cron: 0 16 * * 4
+  # schedule:
+  #   - cron: * 16 * * 4
 
 env:
-  # 以下变量将在矩阵中被覆盖
-  REPO_URL: https://github.com/laipeng668/openwrt-6.x.git
-  REPO_BRANCH: k6.12-nss
-  # 以下变量保持不变
   CLASH_KERNEL: amd64
-  MADS: false
-  UPLOAD_BIN_DIR: true
+  UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true
+  FIRMWARE_TAG: ipq60xx.ChatZ
   TZ: Asia/Shanghai
 
 jobs:
@@ -26,17 +22,16 @@ jobs:
         CONFIG_TYPE: ['Pro', 'Max', 'Ultra']
         include:
           - REPO_SHORT: 'ImmWrt'
-            REPO_URL: 'https://github.com/laipeng668/immortalwrt.git'
-            REPO_BRANCH: 'master'
+            url: 'https://github.com/laipeng668/immortalwrt.git'
+            branch: 'master'
           - REPO_SHORT: 'OpenWrt'
-            REPO_URL: 'https://github.com/laipeng668/openwrt.git'
-            REPO_BRANCH: 'master'
+            url: 'https://github.com/laipeng668/openwrt.git'
+            branch: 'master'
           - REPO_SHORT: 'LibWrt'
-            REPO_URL: 'https://github.com/laipeng668/openwrt-6.x.git'
-            REPO_BRANCH: 'k6.12-nss'
+            url: 'https://github.com/laipeng668/openwrt-6.x.git'
+            branch: 'k6.12-nss'
     
-    # 在job级别设置运行名称，显示正在编译的具体分支和配置
-    name: Building ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
+    name: Build ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
     
     steps:
     - name: Check Server Performance(检查服务器性能)
@@ -52,19 +47,6 @@ jobs:
         echo -e "$(sudo lshw -short -C memory | grep GiB) \n"
         echo "--------------------------硬盘信息--------------------------"
         echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
-
-    - name: Maximize Available Disk Space(最大化可用磁盘空间​)
-      if: env.MADS == 'true'
-      uses: AdityaGarg8/remove-unwanted-software@master
-      with:
-        remove-dotnet: "true"
-        remove-android: "true"
-        remove-haskell: "true"
-        remove-codeql: "true"
-        remove-docker-images: "true"
-        remove-large-packages: "true"
-        remove-cached-tools: "true"
-        remove-swapfile: "true"
 
     - name: Initialization Environment(初始化环境)
       env:
@@ -85,47 +67,20 @@ jobs:
         df -hT $GITHUB_WORKSPACE
         sudo mkdir -p /mnt/openwrt
         sudo chown -R $(id -u):$(id -g) /mnt/openwrt
-        git clone --depth 1 -b ${{ matrix.REPO_BRANCH }} --single-branch ${{ matrix.REPO_URL }} /mnt/openwrt
+        git clone --depth 1 -b ${{ matrix.branch }} --single-branch ${{ matrix.url }} /mnt/openwrt
         cd /mnt/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
         VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
         echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
-        # 尝试获取内核版本信息，不同仓库可能有不同路径
-        if [ -f "target/linux/generic/kernel-6.12" ]; then
-          VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12)
-        elif [ -f "target/linux/generic/kernel-6.6" ]; then
-          VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.6)
-        elif [ -f "target/linux/generic/kernel-6.1" ]; then
-          VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.1)
-        else
-          VERSION_KERNEL="未知版本"
-        fi
+        VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12)
         echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
 
     - name: Generate Variables(生成变量)
       run: |
-        # 根据矩阵变量选择配置文件
-        if [ "${{ matrix.REPO_SHORT }}" == "LibWrt" ]; then
-          if [ "${{ matrix.CONFIG_TYPE }}" == "Pro" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Pro.config $GITHUB_WORKSPACE/configs/LibWrt.config > $OPENWRT_PATH/.config
-          elif [ "${{ matrix.CONFIG_TYPE }}" == "Max" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config $GITHUB_WORKSPACE/configs/LibWrt.config > $OPENWRT_PATH/.config
-          elif [ "${{ matrix.CONFIG_TYPE }}" == "Ultra" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config $GITHUB_WORKSPACE/configs/Ultra.config $GITHUB_WORKSPACE/configs/LibWrt.config > $OPENWRT_PATH/.config
-          fi
-        else
-          if [ "${{ matrix.CONFIG_TYPE }}" == "Pro" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Pro.config > $OPENWRT_PATH/.config
-          elif [ "${{ matrix.CONFIG_TYPE }}" == "Max" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config > $OPENWRT_PATH/.config
-          elif [ "${{ matrix.CONFIG_TYPE }}" == "Ultra" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config $GITHUB_WORKSPACE/configs/Ultra.config > $OPENWRT_PATH/.config
-          fi
-        fi
-        
+        cp configs/ipq60xx_${{ matrix.CONFIG_TYPE }}.config $OPENWRT_PATH/.config
         cd $OPENWRT_PATH
         make defconfig > /dev/null 2>&1
-        SOURCE_REPO="$(echo ${{ matrix.REPO_URL }} | awk -F '/' '{print $(NF)}')"
+        SOURCE_REPO="$(echo ${{ matrix.url }} | awk -F '/' '{print $(NF)}')"
         echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
         DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
         echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
@@ -137,8 +92,8 @@ jobs:
     - name: Cache Toolchain(缓存工具链)
       uses: actions/cache@main
       with:
-        key: ${{ env.SOURCE_REPO }}-${{ matrix.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
-        restore-keys: ${{ env.SOURCE_REPO }}-${{ matrix.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-
+        key: ${{ env.SOURCE_REPO }}-${{ matrix.branch }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
+        restore-keys: ${{ env.SOURCE_REPO }}-${{ matrix.branch }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
         path: |
           ${{ env.OPENWRT_PATH }}/.ccache
           ${{ env.OPENWRT_PATH }}/staging_dir
@@ -159,28 +114,19 @@ jobs:
   
     - name: Load Custom Configuration(加载自定义配置)
       run: |
-        # 根据矩阵变量重新加载配置文件
         if [ "${{ matrix.REPO_SHORT }}" == "LibWrt" ]; then
-          if [ "${{ matrix.CONFIG_TYPE }}" == "Pro" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Pro.config $GITHUB_WORKSPACE/configs/LibWrt.config > $OPENWRT_PATH/.config
-          elif [ "${{ matrix.CONFIG_TYPE }}" == "Max" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config $GITHUB_WORKSPACE/configs/LibWrt.config > $OPENWRT_PATH/.config
-          elif [ "${{ matrix.CONFIG_TYPE }}" == "Ultra" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config $GITHUB_WORKSPACE/configs/Ultra.config $GITHUB_WORKSPACE/configs/LibWrt.config > $OPENWRT_PATH/.config
-          fi
+          echo "合并配置文件：configs/ipq60xx_${{ matrix.CONFIG_TYPE }}.config + configs/LibWrt.config"
+          cat configs/ipq60xx_${{ matrix.CONFIG_TYPE }}.config configs/LibWrt.config > $OPENWRT_PATH/.config
         else
-          if [ "${{ matrix.CONFIG_TYPE }}" == "Pro" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Pro.config > $OPENWRT_PATH/.config
-          elif [ "${{ matrix.CONFIG_TYPE }}" == "Max" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config > $OPENWRT_PATH/.config
-          elif [ "${{ matrix.CONFIG_TYPE }}" == "Ultra" ]; then
-            cat $GITHUB_WORKSPACE/configs/General.config $GITHUB_WORKSPACE/configs/ipq60xx.config $GITHUB_WORKSPACE/configs/Max.config $GITHUB_WORKSPACE/configs/Ultra.config > $OPENWRT_PATH/.config
-          fi
+          cat configs/ipq60xx_${{ matrix.CONFIG_TYPE }}.config > $OPENWRT_PATH/.config
         fi
-        
-        chmod +x $GITHUB_WORKSPACE/scripts/Script.sh
+        chmod +x scripts/Script.sh
         cd $OPENWRT_PATH
+        # 运行自定义脚本
         $GITHUB_WORKSPACE/scripts/Script.sh
+        # 显示合并后的config列表
+        echo "===== 合并后的配置列表 ====="
+        cat .config | grep "^CONFIG_" | sort
 
     - name: Download DL Package(下载DL软件包)
       run: |
@@ -208,79 +154,107 @@ jobs:
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       uses: actions/upload-artifact@main
       with:
-        name: ${{ env.SOURCE_REPO }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-${{ env.FILE_DATE }}
+        name: ${{ env.SOURCE_REPO }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
         path: ${{ env.OPENWRT_PATH }}/bin
 
     - name: Organize Files(整理文件)
       if: steps.compile.outputs.status == 'success'
       run: |
         cd $OPENWRT_PATH
-        # 列出$OPENWRT_PATH/文件和目录清单oplist.txt
-        ls -la > oplist.txt
+        # 创建文件和目录清单
+        echo "===== $OPENWRT_PATH 文件和目录清单 =====" > oplist.txt
+        ls -la >> oplist.txt
+        echo "===== 显示oplist.txt内容 ====="
+        cat oplist.txt
         
-        cd $OPENWRT_PATH/bin/targets/*/*
+        cd bin/targets/*/*
         
-        # $OPENWRT_PATH/.config 改成$REPO_SHORT加上$CONFIG_TYPE.config
-        cp $OPENWRT_PATH/.config ./${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.config || true
+        # 重命名.config文件
+        NEW_CONFIG_NAME="${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config"
+        echo "重命名 .config 为 $NEW_CONFIG_NAME"
+        cp $OPENWRT_PATH/.config "$NEW_CONFIG_NAME"
         
-        # config.buildinfo 改成$REPO_SHORT加上$CONFIG_TYPE.buildinfo
-        mv config.buildinfo ./${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.buildinfo || true
+        # 重命名config.buildinfo文件
+        NEW_BUILDINFO_NAME="${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.buildinfo"
+        echo "重命名 config.buildinfo 为 $NEW_BUILDINFO_NAME"
+        mv config.buildinfo "$NEW_BUILDINFO_NAME"
         
-        # 移动ipk和apk包
+        # 打包ipk和apk包
+        echo "创建 ipq60xx.Packages.tar.gz"
         mkdir -p packages
-        mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/ || true
-        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages/ || true
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages/ 2>/dev/null || true
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/ 2>/dev/null || true
+        tar -zcf ipq60xx.Packages.tar.gz packages
         
-        # ipk包和apk包打包名为$REPO_SHORT加上$CONFIG_TYPE.Packages.tar.gz
-        tar -zcf ./${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.Packages.tar.gz packages
-        
-        # 修改所有后缀为.bin的固件文件名，在.bin前添加$REPO_SHORT加上$CONFIG_TYPE
+        # 重命名.bin文件
+        echo "重命名所有.bin文件"
         for file in *.bin; do
           if [ -f "$file" ]; then
-            mv "$file" "$(basename "$file" .bin)-${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.bin"
+            newname="${file%.bin}"
+            newname="${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}_${newname}.bin"
+            echo "重命名 $file 为 $newname"
+            mv "$file" "$newname"
           fi
         done
         
         # 清理不需要的文件
         rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
+        
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+
+    - name: Upload Config and List Files(上传配置和清单文件)
+      if: steps.compile.outputs.status == 'success'
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-config-list-${{ env.FILE_DATE }}
+        path: |
+          ${{ env.OPENWRT_PATH }}/oplist.txt
+          ${{ env.FIRMWARE_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config
+          ${{ env.FIRMWARE_PATH }}/${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.buildinfo
+
+    - name: Upload Packages(上传软件包)
+      if: steps.compile.outputs.status == 'success'
+      uses: actions/upload-artifact@main
+      with:
+        name: ipq60xx-Packages-${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE_PATH }}/ipq60xx.Packages.tar.gz
 
     - name: Upload Firmware To Artifact(将固件上传到Artifact)
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
       uses: actions/upload-artifact@main
       with:
-        name: ${{ env.SOURCE_REPO }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-${{ env.FILE_DATE }}
+        name: ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-firmware-${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE_PATH }}
 
     - name: Upload Firmware To Release(发布固件)
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
       uses: ncipollo/release-action@main
       with:
-        name: ${{ env.DATE }} for ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
+        name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
         allowUpdates: true
-        tag: ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
+        tag: ${{ env.FIRMWARE_TAG }}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
         token: ${{ secrets.GITHUB_TOKEN }}
         artifacts: ${{ env.FIRMWARE_PATH }}/*
         body: |
-          **This is OpenWrt Firmware for ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}**
+          **This is OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}**
           ### 📒 固件信息
-          - 这是${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}配置的固件，默认主题为Argon；
-          - 该固件在ImmortalWrt/LibWrt的基础上，添加了额外的软件包，并添加了若干工具，具体详见对应机型的config。
-          - 💻 固件源码: ${{ matrix.REPO_URL }}
-          - 💝 源码分支: ${{ matrix.REPO_BRANCH }}
-          - 🌐 默认地址: **192.168.111.1**
+          - 这是开启全功能NSS的6.12内核固件，默认主题为Argon；该固件在ImmortalWrt的基础上，添加了额外的软件包cpufreq、ddns、ttyd、upnp、wolplus、samba4、vlmcsd、aria2、autoreboot、uhttpd、wifischedule、frps、frpc、diskman、hd-idle、banip、acme、arpbind、usb-printer、homeproxy、openlist、adguardhome、oaf、sqm、wireguard、watchcat、3cat（**Taiyi**额外增加了filebrowser、dockerman、gecoosac、lucky），并添加了若干工具，具体详见对应机型的config。
+          - 💻 这是 ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }} 平台使用的 OpenWrt 固件
+          - ⚽ 固件源码: ${{ matrix.url }}
+          - 💝 源码分支: ${{ matrix.branch }}
+          - 🌐 默认地址: **192.168.2.1**
           - 🔑 默认密码: none
           - 🚀 WiFi名称: **Star**
           - 🔑 WiFi密码: 12345678
-          ### 📒 固件版本
+          ### 🧊 固件版本
           - 固件内核版本：**${{ env.VERSION_KERNEL }}**
-          - 固件编译前最后一次➦[主源码](${{ matrix.REPO_URL }})更新记录
+          - 固件编译前最后一次➦[主源码](${{ matrix.url }})更新记录
           - ${{ env.VERSION_INFO }}
 
     - name: Delete Old Cache(删除旧缓存)
       run: |
         # 获取缓存列表并删除
-        gh cache list --key ${{ env.SOURCE_REPO }}-${{ matrix.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}- --json key --jq '.[] | .key' | while read -r key; do
+        gh cache list --key ${{ env.SOURCE_REPO }}-${{ matrix.branch }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key --jq '.[] | .key' | while read -r key; do
           gh cache delete "$key"
         done
         # 输出缓存状态

@@ -120,10 +120,10 @@ jobs:
         else
           cat configs/ipq60xx_${{ matrix.CONFIG_TYPE }}.config > $OPENWRT_PATH/.config
         fi
-        chmod +x scripts/Roc-script.sh
+        chmod +x scripts/Script.sh
         cd $OPENWRT_PATH
         # 运行自定义脚本
-        $GITHUB_WORKSPACE/scripts/Roc-script.sh
+        $GITHUB_WORKSPACE/scripts/Script.sh
         # 显示合并后的config列表
         echo "===== 合并后的配置列表 ====="
         cat .config | grep "^CONFIG_" | sort

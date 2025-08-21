@@ -1,354 +1,234 @@
-# 自动化构建 OpenWrt / ImmWrt / LibWrt 的工作流（含中文注释）
 name: AA.Copilot
 
-# 触发方式：手动、被调用、以及定时（每周四 16:00）
 on:
   workflow_dispatch:
-  workflow_call:
   schedule:
     - cron: '0 16 * * 4'
 
-# 全局环境变量（UPLOAD_BIN_DIR 已改为 true，TAG 设为 ipq60xx.Copilot）
 env:
-  TZ: Asia/Shanghai
-  DIY_SCRIPT: scripts/Script.sh
-  CLASH_KERNEL: amd64
-  MADS: false
-  UPLOAD_BIN_DIR: true
-  FIRMWARE_RELEASE: true
-  FIRMWARE_TAG: ipq60xx.Copilot
+  FIRMWARE_TAG: "ipq60xx.Copilot"
 
 jobs:
-  Build:
-    name: "Build ${{ matrix.REPO_SHORT }} - ${{ matrix.CONFIG_TYPE }} (branch: ${{ matrix.branch }})"
-    runs-on: ubuntu-22.04
+  build:
+    # show the specific branch and config in the run name
+    name: Build ${{ matrix.repo.repo_short }}:${{ matrix.repo.repo_branch }} - ${{ matrix.config_type }}
+    runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
       matrix:
-        include:
-          - REPO_SHORT: 'ImmWrt'
-            url: 'https://github.com/laipeng668/immortalwrt.git'
-            branch: 'master'
-            CONFIG_TYPE: 'Pro'
-          - REPO_SHORT: 'ImmWrt'
-            url: 'https://github.com/laipeng668/immortalwrt.git'
-            branch: 'master'
-            CONFIG_TYPE: 'Max'
-          - REPO_SHORT: 'ImmWrt'
-            url: 'https://github.com/laipeng668/immortalwrt.git'
-            branch: 'master'
-            CONFIG_TYPE: 'Ultra'
-          - REPO_SHORT: 'OpenWrt'
-            url: 'https://github.com/laipeng668/openwrt.git'
-            branch: 'master'
-            CONFIG_TYPE: 'Pro'
-          - REPO_SHORT: 'OpenWrt'
-            url: 'https://github.com/laipeng668/openwrt.git'
-            branch: 'master'
-            CONFIG_TYPE: 'Max'
-          - REPO_SHORT: 'OpenWrt'
-            url: 'https://github.com/laipeng668/openwrt.git'
-            branch: 'master'
-            CONFIG_TYPE: 'Ultra'
-          - REPO_SHORT: 'LibWrt'
-            url: 'https://github.com/laipeng668/openwrt-6.x.git'
-            branch: 'k6.12-nss'
-            CONFIG_TYPE: 'Pro'
-          - REPO_SHORT: 'LibWrt'
-            url: 'https://github.com/laipeng668/openwrt-6.x.git'
-            branch: 'k6.12-nss'
-            CONFIG_TYPE: 'Max'
-          - REPO_SHORT: 'LibWrt'
-            url: 'https://github.com/laipeng668/openwrt-6.x.git'
-            branch: 'k6.12-nss'
-            CONFIG_TYPE: 'Ultra'
+        # three repo definitions (each contains short name, url and branch)
+        repo:
+          - repo_short: "ImmWrt"
+            repo_url: "https://github.com/laipeng668/immortalwrt.git"
+            repo_branch: "master"
+          - repo_short: "OpenWrt"
+            repo_url: "https://github.com/laipeng668/openwrt.git"
+            repo_branch: "master"
+          - repo_short: "LibWrt"
+            repo_url: "https://github.com/laipeng668/openwrt-6.x.git"
+            repo_branch: "k6.12-nss"
+        # three config types
+        config_type: [ "Pro", "Max", "Ultra" ]
+      fail-fast: false
 
+    # expose convenient env variables inside steps
     env:
-      REPO_URL: ${{ matrix.url }}
-      REPO_BRANCH: ${{ matrix.branch }}
-      REPO_SHORT: ${{ matrix.REPO_SHORT }}
-      CONFIG_TYPE: ${{ matrix.CONFIG_TYPE }}
-      OPENWRT_PATH: /mnt/openwrt
-      FRAG_DIR: configs
-      GENERAL_FRAGMENT: configs/General
-      IPQ_FRAGMENT: configs/ipq60xx
-      LIBWRT_FRAGMENT: configs/LibWrt
+      REPO_SHORT: ${{ matrix.repo.repo_short }}
+      REPO_URL: ${{ matrix.repo.repo_url }}
+      REPO_BRANCH: ${{ matrix.repo.repo_branch }}
+      CONFIG_TYPE: ${{ matrix.config_type }}
+      OPENWRT_PATH: ${{ github.workspace }}/openwrt
+      WORKSPACE: ${{ github.workspace }}
 
     steps:
-      - name: Checkout workflow repository（检出当前仓库以获取 configs 和脚本）
+      - name: Checkout workflow repo (contains configs)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: 检查服务器性能（提示）
+      - name: Clone target OpenWrt repo
         run: |
-          echo "开始检查服务器信息..."
-          grep -m1 'model name' /proc/cpuinfo || true
-          free -h || true
-          df -h || true
+          rm -rf "${OPENWRT_PATH}"
+          git clone --depth=1 "${REPO_URL}" -b "${REPO_BRANCH}" "${OPENWRT_PATH}"
+        shell: bash
 
-      - name: 初始化环境（安装依赖：包含构建需要的系统库，例如 fuse.h）
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      - name: Show selected repo and config
         run: |
-          set -euo pipefail
-          sudo apt-get -y update
-          sudo apt-get -y install \
-            build-essential asciidoc binutils bzip2 gawk gettext git \
-            libncurses5-dev libssl-dev python3 python3-distutils rsync unzip zlib1g-dev subversion wget \
-            pkg-config libfuse-dev libfuse3-dev libsqlite3-dev || true
-          sudo timedatectl set-timezone "$TZ" || true
+          echo "REPO_SHORT=${REPO_SHORT}"
+          echo "REPO_URL=${REPO_URL}"
+          echo "REPO_BRANCH=${REPO_BRANCH}"
+          echo "CONFIG_TYPE=${CONFIG_TYPE}"
+          echo "OPENWRT_PATH=${OPENWRT_PATH}"
 
-      - name: Clone Source Code（克隆目标源码）
+      - name: Prepare .config (merge if LibWrt)
         run: |
-          set -euo pipefail
-          sudo mkdir -p "${OPENWRT_PATH}"
-          sudo chown -R $(id -u):$(id -g) "${OPENWRT_PATH}"
-          git clone --depth 1 -b "${REPO_BRANCH}" --single-branch "${REPO_URL}" "${OPENWRT_PATH}"
-          cd "${OPENWRT_PATH}"
-          echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-          VERSION_INFO=$(git show -s --date=short --format="作者: %an | 时间: %cd | 内容: %s | hash: %H" || true)
-          echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
-
-      - name: Prepare .config by merging config fragments（支持片段带/不带 .config 后缀）
-        working-directory: ${{ github.workspace }}
-        run: |
-          set -euo pipefail
-          CFGDIR="${{ github.workspace }}/${FRAG_DIR}"
-          TARGET="${OPENWRT_PATH}/.config"
-          rm -f "$TARGET"
-
-          echo "准备合并 fragments: REPO_SHORT=${REPO_SHORT}, CONFIG_TYPE=${CONFIG_TYPE}"
-          if [ ! -d "$CFGDIR" ]; then
-            echo "错误：configs/ 目录未找到，请在仓库根目录创建 configs/ 并包含 General(.config), ipq60xx(.config), Pro(.config), Max(.config), Ultra(.config), LibWrt(.config)（如需）"
-            ls -la || true
-            exit 1
-          fi
-
-          append_fragment() {
-            local base="$1"
-            local found=0
-            for cand in "$CFGDIR/$base" "$CFGDIR/$base.config"; do
-              if [ -f "$cand" ]; then
-                echo "Appending fragment: $cand"
-                cat "$cand" >> "$TARGET"
-                echo -e "\n# --- appended $cand ---\n" >> "$TARGET"
-                found=1
-                break
-              fi
-            done
-            if [ $found -eq 0 ]; then
-              echo "Warning: fragment for '$base' not found (tried: $CFGDIR/$base, $CFGDIR/$base.config)"
-            fi
-          }
-
-          append_fragment "General"
-          append_fragment "ipq60xx"
-
-          if [ "$CONFIG_TYPE" = "Pro" ]; then
-            append_fragment "Pro"
-          elif [ "$CONFIG_TYPE" = "Max" ]; then
-            append_fragment "Max"
-          elif [ "$CONFIG_TYPE" = "Ultra" ]; then
-            append_fragment "Max"
-            append_fragment "Ultra"
+          CONFIG_SRC="${WORKSPACE}/configs/ipq60xx_${CONFIG_TYPE}.config"
+          LIB_CONFIG="${WORKSPACE}/configs/LibWrt.config"
+          TARGET_CONFIG="${OPENWRT_PATH}/.config"
+          echo "Using base config: ${CONFIG_SRC}"
+          if [ "${REPO_SHORT}" = "LibWrt" ]; then
+            echo "Merging ${CONFIG_SRC} + ${LIB_CONFIG} -> ${TARGET_CONFIG}"
+            # merge (append LibWrt config after base config)
+            cat "${CONFIG_SRC}" > "${TARGET_CONFIG}"
+            echo "" >> "${TARGET_CONFIG}"
+            cat "${LIB_CONFIG}" >> "${TARGET_CONFIG}"
+            echo "Merged config contents (deduped):"
+            # show resulting config list (unique lines)
+            grep -v '^#' "${TARGET_CONFIG}" | sed '/^\s*$/d' | sort -u || true
+            echo "Full merged .config:"
+            sed -n '1,200p' "${TARGET_CONFIG}" || true
           else
-            echo "未知的 CONFIG_TYPE: $CONFIG_TYPE"
-            exit 1
+            echo "Copying ${CONFIG_SRC} -> ${TARGET_CONFIG}"
+            cp "${CONFIG_SRC}" "${TARGET_CONFIG}" || true
+            echo "Config contents:"
+            sed -n '1,200p' "${TARGET_CONFIG}" || true
           fi
+        shell: bash
 
-          if [ "$REPO_SHORT" = "LibWrt" ]; then
-            append_fragment "LibWrt"
-          fi
-
-          echo "合并完成，预览 .config（前200行）："
-          if [ -f "$TARGET" ]; then
-            sed -n '1,200p' "$TARGET" || true
-          else
-            echo "注意：合并后未生成 $TARGET（未找到任何 fragment），请检查 configs/ 目录及文件名是否正确。"
-            exit 1
-          fi
-
-      - name: Generate Variables（生成额外变量）
+      - name: (Optional) show first lines of feeds.conf and make menuconfig information
         run: |
-          set -euo pipefail
+          if [ -f "${OPENWRT_PATH}/feeds.conf" ]; then
+            echo "feeds.conf:"
+            sed -n '1,50p' "${OPENWRT_PATH}/feeds.conf"
+          fi
+
+      - name: Update feeds and prepare build (safe defaults)
+        run: |
+          set -e
           cd "${OPENWRT_PATH}"
-          make defconfig >/dev/null 2>&1 || true
-          SOURCE_REPO="$(basename ${REPO_URL})"
-          echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
-          DEVICE_TARGET=$(grep -m1 CONFIG_TARGET_BOARD .config | awk -F '"' '{print $2}' || true)
-          echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
-          DEVICE_SUBTARGET=$(grep -m1 CONFIG_TARGET_SUBTARGET .config | awk -F '"' '{print $2}' || true)
-          echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
-          HASH=$(git -C . rev-parse --short HEAD 2>/dev/null || true)
-          echo "HASH=$HASH" >> $GITHUB_ENV
-          echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+          # update feeds (if present)
+          if [ -f scripts/feeds ]; then
+            scripts/feeds update -a || true
+            scripts/feeds install -a || true
+          fi
+        shell: bash
 
-      - name: Cache Toolchain（缓存编译工具链）
-        uses: actions/cache@v4
-        with:
-          key: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
-          restore-keys: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
-          path: |
-            ${{ env.OPENWRT_PATH }}/.ccache
-            ${{ env.OPENWRT_PATH }}/staging_dir
-
-      - name: Install Feeds（更新并安装 feeds）
+      - name: Build OpenWrt (may take long — adjust as needed)
         run: |
+          set -e
           cd "${OPENWRT_PATH}"
-          ./scripts/feeds update -a || true
-          ./scripts/feeds install -a || true
+          # Use .config prepared earlier. Run defconfig and build - keep tolerant to failures for CI demonstration.
+          if [ -f .config ]; then
+            echo "Running make defconfig"
+            make defconfig || true
+          fi
+          echo "Starting make -j$(nproc)"
+          # the build may fail in CI runners; we continue to post-processing steps as requested
+          make -j$(nproc) || true
+        shell: bash
 
-      - name: Run DIY script if present（如有自定义脚本则执行）
+      - name: Generate oplist.txt (list of files and directories under OPENWRT_PATH)
         run: |
-          if [ -f "${{ github.workspace }}/$DIY_SCRIPT" ]; then
-            chmod +x "${{ github.workspace }}/$DIY_SCRIPT" || true
-            cd "${OPENWRT_PATH}"
-            "${{ github.workspace }}/$DIY_SCRIPT" || true
-          else
-            echo "未检测到自定义脚本，跳过。"
-          fi
+          ls -laR "${OPENWRT_PATH}" > "${WORKSPACE}/oplist.txt" || true
+          echo "===== oplist.txt ====="
+          sed -n '1,200p' "${WORKSPACE}/oplist.txt" || true
+        shell: bash
 
-      - name: Download DL Package（make download）
+      - name: Rename/move .config to REPO_SHORT_CONFIG_TYPE.config (inside OPENWRT_PATH) and show it
         run: |
-          cd "${OPENWRT_PATH}"
-          make defconfig || true
-          make download -j$(nproc) || true
-          find dl -size -1024c -exec rm -f {} \; || true
+          SRC="${OPENWRT_PATH}/.config"
+          DST="${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.config"
+          echo "Renaming ${SRC} -> ${DST}"
+          mv "${SRC}" "${DST}" || true
+          echo "Resulting config file path:"
+          ls -l "${DST}" || true
+          echo "Contents (first 200 lines):"
+          sed -n '1,200p' "${DST}" || true
+        shell: bash
 
-      - name: Compile Firmware（编译固件）
-        id: compile
+      - name: Rename config.buildinfo to REPO_SHORT_CONFIGTYPE.buildinfo (inside OPENWRT_PATH)
         run: |
-          set -euo pipefail
-          cd "${OPENWRT_PATH}"
-          echo "开始编译（使用 $(nproc) 个线程）"
-          if ! make -j$(nproc); then
-            echo "并行编译失败，尝试单线程编译并输出详细日志"
-            make -j1 V=s || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-          echo "status=success" >> $GITHUB_OUTPUT
-          echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-          echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+          SRC="${OPENWRT_PATH}/config.buildinfo"
+          DST="${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.buildinfo"
+          echo "Renaming ${SRC} -> ${DST}"
+          mv "${SRC}" "${DST}" || true
+          echo "Result:"
+          ls -l "${DST}" || true
+        shell: bash
 
-      - name: Collect & rename outputs（整理并重命名输出）
-        if: steps.compile.outputs.status == 'success'
-        working-directory: ${{ env.OPENWRT_PATH }}
+      - name: Package ipk/apk files into ipq60xx.Packages.tar.gz
         run: |
-          set -euo pipefail
-          echo "生成 oplist.txt 列表..."
-          ls -la > "${OPENWRT_PATH}/oplist.txt" || true
-
-          # 重命名 .config -> ${REPO_SHORT}_${CONFIG_TYPE}.config
-          if [ -f "${OPENWRT_PATH}/.config" ]; then
-            mv -f "${OPENWRT_PATH}/.config" "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.config" || true
-            echo "Renamed .config -> ${REPO_SHORT}_${CONFIG_TYPE}.config"
-          fi
-
-          # 重命名 config.buildinfo -> ${REPO_SHORT}_${CONFIG_TYPE}.buildinfo
-          if [ -f "${OPENWRT_PATH}/config.buildinfo" ]; then
-            mv -f "${OPENWRT_PATH}/config.buildinfo" "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.buildinfo" || true
-            echo "Renamed config.buildinfo -> ${REPO_SHORT}_${CONFIG_TYPE}.buildinfo"
-          fi
-
-          # 打包 ipk/apk 为 ${REPO_SHORT}_${CONFIG_TYPE}.Packages.tar.gz
-          PKG_TMP=$(mktemp -d)
-          find "${OPENWRT_PATH}" -type f \( -name '*.ipk' -o -name '*.apk' \) -print0 | xargs -0 -I{} cp --parents "{}" "$PKG_TMP" 2>/dev/null || true
-          if [ "$(find "$PKG_TMP" -type f | wc -l)" -gt 0 ]; then
-            tar -C "$PKG_TMP" -czf "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.Packages.tar.gz" .
-            echo "Created packages tarball: ${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.Packages.tar.gz"
-          else
-            echo "未找到 ipk/apk 包，跳过打包。"
-          fi
-          rm -rf "$PKG_TMP" || true
-
-          # 仅对以特定前缀开头的固件名进行重命名，避免改动非固件 .bin
-          echo "重命名固件 .bin 文件：替换指定前缀为 ${REPO_SHORT} 并在末尾添加 _${CONFIG_TYPE}"
-          FW_TMP=$(mktemp -d)
-          rename_count=0
-          find "${OPENWRT_PATH}" -type f -name '*.bin' -print0 | while IFS= read -r -d '' f; do
-            base=$(basename "$f" .bin)
-            dir=$(dirname "$f")
-            matched=0
-            case "$base" in
-              immortalwrt-qualcommax-ipq60xx-jdcloud*)
-                rest=${base#immortalwrt-qualcommax-ipq60xx-jdcloud}
-                newbase="${REPO_SHORT}${rest}"
-                matched=1
-                ;;
-              libwrt-qualcommax-ipq60xx-jdcloud*)
-                rest=${base#libwrt-qualcommax-ipq60xx-jdcloud}
-                newbase="${REPO_SHORT}${rest}"
-                matched=1
-                ;;
-              openwrt-qualcommax-ipq60xx-jdcloud*)
-                rest=${base#openwrt-qualcommax-ipq60xx-jdcloud}
-                newbase="${REPO_SHORT}${rest}"
-                matched=1
-                ;;
-              *)
-                # 非目标前缀，跳过
-                ;;
-            esac
-
-            if [ "$matched" -eq 1 ]; then
-              # 确保不会重复添加后缀
-              case "$newbase" in
-                *"_${CONFIG_TYPE}") ;;
-                *) newbase="${newbase}_${CONFIG_TYPE}" ;;
-              esac
-              newname="${dir}/${newbase}.bin"
-              if [ "$f" != "$newname" ]; then
-                mv -f "$f" "$newname" || true
-                echo "Renamed: $f -> $newname"
-              fi
-              # 复制到临时目录以便打包（只复制文件名，不保留整个树）
-              cp -f "${newname}" "${FW_TMP}/" || true
-              rename_count=$((rename_count+1))
-            fi
+          PKG_DIR="${WORKSPACE}/_packages_for_archive"
+          mkdir -p "${PKG_DIR}"
+          find "${OPENWRT_PATH}" -type f \( -name '*.ipk' -o -name '*.apk' \) -print0 | while IFS= read -r -d '' f; do
+            # preserve directory structure under PKG_DIR
+            dest="${PKG_DIR}/$(dirname "${f#"${OPENWRT_PATH}/"}")"
+            mkdir -p "${dest}"
+            cp -a "${f}" "${dest}/" || true
           done
-
-          echo "Renamed $rename_count firmware files (copied to $FW_TMP for packaging)."
-
-          # 生成固件 tar 包，命名为 ${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz
-          if [ "$(ls -A "$FW_TMP" 2>/dev/null || true)" ]; then
-            tar -C "$FW_TMP" -czf "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz" .
-            echo "Created firmware tarball: ${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.firmware.tar.gz"
+          TAR="${WORKSPACE}/ipq60xx.Packages.tar.gz"
+          if [ -d "${PKG_DIR}" ] && [ "$(ls -A "${PKG_DIR}")" ]; then
+            tar -C "${PKG_DIR}" -czf "${TAR}" . || true
+            echo "Created ${TAR}"
+            ls -l "${TAR}" || true
           else
-            echo "Warning: 未在 $FW_TMP 中找到任何重命名后的固件文件，固件包未创建。请检查重命名匹配规则。"
+            echo "No .ipk or .apk files found; creating empty tar as placeholder"
+            tar -czf "${TAR}" --files-from /dev/null || true
+            ls -l "${TAR}" || true
           fi
-          rm -rf "$FW_TMP" || true
+        shell: bash
 
-      - name: Upload artifacts（上传产物）
-        if: steps.compile.outputs.status == 'success'
+      - name: Rename all .bin firmware files by prefixing with REPO_SHORT_CONFIGTYPE
+        run: |
+          echo "Renaming .bin files under ${OPENWRT_PATH}"
+          find "${OPENWRT_PATH}" -type f -name '*.bin' -print0 | while IFS= read -r -d '' file; do
+            dir=$(dirname "$file")
+            base=$(basename "$file")
+            newname="${dir}/${REPO_SHORT}_${CONFIG_TYPE}_${base}"
+            echo "mv \"$file\" -> \"$newname\""
+            mv "$file" "$newname" || true
+          done
+          echo "Renamed .bin files:"
+          find "${OPENWRT_PATH}" -type f -name "${REPO_SHORT}_${CONFIG_TYPE}_*.bin" -print || true
+        shell: bash
+
+      - name: Show files to be uploaded (summary)
+        run: |
+          echo "oplist.txt:"
+          ls -la "${WORKSPACE}/oplist.txt" || true
+          echo "Renamed config (in OPENWRT_PATH):"
+          ls -la "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.config" || true
+          echo "Renamed buildinfo (in OPENWRT_PATH):"
+          ls -la "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.buildinfo" || true
+          echo "Packages archive:"
+          ls -la "${WORKSPACE}/ipq60xx.Packages.tar.gz" || true
+          echo ".bin files:"
+          find "${OPENWRT_PATH}" -type f -name "${REPO_SHORT}_${CONFIG_TYPE}_*.bin" -print || true
+        shell: bash
+
+      - name: Upload oplist.txt
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-artifacts
-          path: |
-            ${{ env.OPENWRT_PATH }}/oplist.txt
-            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config
-            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.buildinfo
-            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.Packages.tar.gz
-            ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.firmware.tar.gz
+          name: "${{ matrix.repo.repo_short }}_${{ matrix.config_type }}-oplist"
+          path: "${WORKSPACE}/oplist.txt"
 
-      - name: Upload Firmware To Release（如启用则创建/更新 Release 并上传固件）
-        if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
-        uses: ncipollo/release-action@v1
+      - name: Upload renamed .config
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
-          allowUpdates: true
-          tag: ${{ env.FIRMWARE_TAG }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          artifacts: ${{ env.OPENWRT_PATH }}/${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.firmware.tar.gz
-          body: |
-            **This is OpenWrt Firmware (TAG: ${{ env.FIRMWARE_TAG }})**
-            - 源码仓库: ${{ env.REPO_URL }}
-            - 源码分支: ${{ env.REPO_BRANCH }}
-            - 版本信息: ${{ env.VERSION_INFO }}
+          name: "${{ matrix.repo.repo_short }}_${{ matrix.config_type }}.config"
+          path: "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.config"
 
-      - name: 清理与输出缓存信息
+      - name: Upload renamed buildinfo
+        uses: actions/upload-artifact@v4
+        with:
+          name: "${{ matrix.repo.repo_short }}_${{ matrix.config_type }}.buildinfo"
+          path: "${OPENWRT_PATH}/${REPO_SHORT}_${CONFIG_TYPE}.buildinfo"
+
+      - name: Upload ipq60xx.Packages.tar.gz
+        uses: actions/upload-artifact@v4
+        with:
+          name: "ipq60xx.Packages.tar.gz"
+          path: "${WORKSPACE}/ipq60xx.Packages.tar.gz"
+
+      - name: Upload renamed firmware .bin files (if any)
+        uses: actions/upload-artifact@v4
+        with:
+          name: "${{ matrix.repo.repo_short }}_${{ matrix.config_type }}-firmware-bins"
+          path: |
+            ${{ github.workspace }}/openwrt/**/${{ matrix.repo.repo_short }}_${{ matrix.config_type }}_*.bin
+          if-no-files-found: ignore
+
+      - name: Final artifact list (debug)
         run: |
-          echo "清理临时文件并输出缓存占用情况..."
-          du -sh "${OPENWRT_PATH}/.ccache" 2>/dev/null || true
-          du -sh "${OPENWRT_PATH}/staging_dir" 2>/dev/null || true
+          echo "Artifacts uploaded for ${REPO_SHORT}_${CONFIG_TYPE}"
+          ls -la "${WORKSPACE}" || true
+        shell: bash

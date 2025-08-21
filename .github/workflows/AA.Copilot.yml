@@ -408,15 +408,15 @@ jobs:
             create_resp=$(curl -s -X POST -H "Authorization: token ${GITHUB_TOKEN}" \
               -H "Content-Type: application/json" \
               -d @- "${API}" <<EOF
-{
-  "tag_name": "${TAG}",
-  "name": "${TITLE}",
-  "body": "$(sed 's/"/\\"/g' "${BODY_FILE}")",
-  "draft": false,
-  "prerelease": false
-}
-EOF
-)
+                {
+                  "tag_name": "${TAG}",
+                  "name": "${TITLE}",
+                  "body": "$(sed 's/"/\\"/g' "${BODY_FILE}")",
+                  "draft": false,
+                  "prerelease": false
+                }
+                EOF
+                )
             release_id=$(echo "$create_resp" | jq -r .id)
             upload_url=$(echo "$create_resp" | jq -r .upload_url)
             if [ -z "$release_id" ] || [ "$release_id" = "null" ]; then

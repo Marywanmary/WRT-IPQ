@@ -5,11 +5,12 @@
 # - 仅在 bin/targets/*/* 目录中重命名最终的固件（factory/sysupgrade 等），避免修改 build_dir 中的中间产物
 # - 整理好的文件先作为 artifacts 上传（每个矩阵项一个 artifact），最后由 publish job 下载所有 artifacts 并一次性上传到单个 Release
 # - 全局环境变量 FIRMWARE_TAG 用于 Release 命名与说明
+name: AA.Copilot
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
+    workflow_dispatch:
+    push:
+      branches:
+        - main
 
 env:
   # 固定固件标识（Release 名称会引用）

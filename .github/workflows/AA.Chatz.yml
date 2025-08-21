@@ -120,10 +120,10 @@ jobs:
         else
           cat configs/ipq60xx_${{ matrix.CONFIG_TYPE }}.config > $OPENWRT_PATH/.config
         fi
-        chmod +x scripts/Script.sh
+        chmod +x scripts/Roc-script.sh
         cd $OPENWRT_PATH
         # 运行自定义脚本
-        $GITHUB_WORKSPACE/scripts/Script.sh
+        $GITHUB_WORKSPACE/scripts/Roc-script.sh
         # 显示合并后的config列表
         echo "===== 合并后的配置列表 ====="
         cat .config | grep "^CONFIG_" | sort
@@ -154,7 +154,7 @@ jobs:
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       uses: actions/upload-artifact@main
       with:
-        name: ${{ env.SOURCE_REPO }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
+        name: ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-bin-${{ env.FILE_DATE }}
         path: ${{ env.OPENWRT_PATH }}/bin
 
     - name: Organize Files(整理文件)
@@ -186,12 +186,17 @@ jobs:
         mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/ 2>/dev/null || true
         tar -zcf ipq60xx.Packages.tar.gz packages
         
-        # 重命名.bin文件
+        # 重命名.bin文件 - 修改后的逻辑
         echo "重命名所有.bin文件"
         for file in *.bin; do
           if [ -f "$file" ]; then
-            newname="${file%.bin}"
-            newname="${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}_${newname}.bin"
+            # 提取设备型号和固件类型部分
+            # 示例: immortalwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-factory.bin
+            # 提取后: jdcloud_re-cs-02-squashfs-factory
+            base_name=$(echo "$file" | sed -E 's/.*-ipq60xx-(.*)\.bin/\1/')
+            
+            # 构建新文件名: jdcloud_re-cs-02-squashfs-factory-ImmWrt-Pro.bin
+            newname="${base_name}-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}.bin"
             echo "重命名 $file 为 $newname"
             mv "$file" "$newname"
           fi
@@ -216,7 +221,7 @@ jobs:
       if: steps.compile.outputs.status == 'success'
       uses: actions/upload-artifact@main
       with:
-        name: ipq60xx-Packages-${{ env.FILE_DATE }}
+        name: ipq60xx-Packages-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE_PATH }}/ipq60xx.Packages.tar.gz
 
     - name: Upload Firmware To Artifact(将固件上传到Artifact)

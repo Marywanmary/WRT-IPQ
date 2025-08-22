@@ -209,11 +209,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set Build Outputs
+        if: steps.compile.outputs.status == 'success'
+        run: |
+          echo "version_kernel=${{ env.VERSION_KERNEL }}" >> $GITHUB_OUTPUT
+          echo "version_info=${{ env.VERSION_INFO }}" >> $GITHUB_OUTPUT
+
   publish:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
-    if: env.FIRMWARE_RELEASE == 'true'
+    if: ${{ env.FIRMWARE_RELEASE == 'true' }}
     
     steps:
       - name: Set Release Date
@@ -251,5 +257,5 @@ jobs:
             - 🔑 WiFi密码: 12345678
             
             ### 🧊 固件版本
-            - 内核版本：**${{ env.VERSION_KERNEL }}**
-            - 源码更新记录：${{ env.VERSION_INFO }}
+            - 内核版本：**${{ needs.build.outputs.version_kernel }}**
+            - 源码更新记录：${{ needs.build.outputs.version_info }}

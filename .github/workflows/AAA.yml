@@ -84,9 +84,9 @@ jobs:
           echo "加载基础配置文件: $CONFIG_FILE"
           cp "$CONFIG_FILE" ${{ env.OPENWRT_PATH }}/.config
           
-          # 显示基础配置内容（前500行）
-          echo "===== 基础配置文件内容（前500行） ====="
-          head -n 500 "$CONFIG_FILE"
+          # 显示基础配置内容（前200行）
+          echo "===== 基础配置文件内容（前200行） ====="
+          head -n 200 "$CONFIG_FILE"
 
       - name: Merge Config for LibWrt
         if: matrix.repo.repo_short == 'LibWrt'
@@ -142,7 +142,7 @@ jobs:
           
           # 验证关键包是否安装
           echo "===== 验证关键包是否安装 ====="
-          ./scripts/feeds list | grep -E "(luci-app|docker|frp|aria2|samba4)" | head -20
+          ./scripts/feeds list | grep -E "(luci-app|docker|frp|aria2|samba4|openclash|tailscale)" | head -20
 
       - name: Load Custom Configuration
         run: |

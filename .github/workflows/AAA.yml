@@ -219,7 +219,8 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
-    if: ${{ env.FIRMWARE_RELEASE == 'true' }}
+    # 修复环境变量引用方式
+    if: ${{ vars.FIRMWARE_RELEASE == 'true' }}
     
     steps:
       - name: Set Release Date
@@ -241,12 +242,12 @@ jobs:
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          name: ${{ env.RELEASE_DATE }} for ${{ env.FIRMWARE_TAG }}
-          tag: ${{ env.FIRMWARE_TAG }}
+          name: ${{ env.RELEASE_DATE }} for ${{ vars.FIRMWARE_TAG }}
+          tag: ${{ vars.FIRMWARE_TAG }}
           allowUpdates: true
           artifacts: release_assets/*
           body: |
-            **OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}**
+            **OpenWrt Firmware for ${{ vars.FIRMWARE_TAG }}**
             
             ### 📒 固件信息
             - 这是开启全功能NSS的6.12内核固件，默认主题为Argon

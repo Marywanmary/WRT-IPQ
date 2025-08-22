@@ -1,4 +1,4 @@
-name: ipq60xx-Immrt-Max
+name: ipq60xx-ImmWrt-Max
 
 on:
   workflow_dispatch:

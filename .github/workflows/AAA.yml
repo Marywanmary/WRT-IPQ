@@ -267,12 +267,15 @@ jobs:
         run: |
           echo "version_kernel=${{ env.VERSION_KERNEL }}" >> $GITHUB_OUTPUT
           echo "version_info=${{ env.VERSION_INFO }}" >> $GITHUB_OUTPUT
+          # 传递FIRMWARE_RELEASE值到输出
+          echo "firmware_release=${{ env.FIRMWARE_RELEASE }}" >> $GITHUB_OUTPUT
 
   publish:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
-    if: always() && needs.build.result == 'success' && env.FIRMWARE_RELEASE == 'true'
+    # 修复：使用输出变量而不是直接引用env
+    if: always() && needs.build.result == 'success' && needs.build.outputs.firmware_release == 'true'
     
     steps:
       - name: Set Release Date

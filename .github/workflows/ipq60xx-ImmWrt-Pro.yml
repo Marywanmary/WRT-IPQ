@@ -1,25 +1,19 @@
 name: ipq60xx-ImmWrt-Pro
-
 on:
   workflow_dispatch:
   workflow_call:
   schedule:
     - cron: 0 16 * * 4
 
+permissions:
+  contents: write
+  packages: write
+
 env:
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
   REPO_BRANCH: master
   REPO_SHORT: ImmWrt
-  #REPO_URL: https://github.com/laipeng668/openwrt.git
-  #REPO_BRANCH: master
-  #REPO_SHORT: OpenWrt
-  #REPO_URL: https://github.com/laipeng668/immortalwrt.git
-  #REPO_BRANCH: master
-  #REPO_SHORT: LibWrt
   CONFIG_FILE: configs/ipq60xx_Pro.config
-  #CONFIG_FILE: configs/ipq60xx_Max.config
-  #CONFIG_FILE: configs/ipq60xx_Ultra.config
-  #GENERAL_CONFIG_FILE: configs/General.config
   DIY_SCRIPT: scripts/Script.sh
   CLASH_KERNEL: amd64
   UPLOAD_BIN_DIR: false
@@ -30,7 +24,6 @@ env:
 jobs:
   Build:
     runs-on: ubuntu-22.04
-
     steps:
     - name: Check Server Performance(检查服务器性能)
       run: |
@@ -109,7 +102,7 @@ jobs:
         cd $OPENWRT_PATH
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-  
+
     - name: Load Custom Configuration(加载自定义配置)
       run: |
         cat $CONFIG_FILE > $OPENWRT_PATH/.config
@@ -131,8 +124,14 @@ jobs:
       run: |
         cd $OPENWRT_PATH
         echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
-        echo "status=success" >> $GITHUB_OUTPUT
+        if make -j$(nproc) || make -j1 || make -j1 V=s; then
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "编译成功完成"
+        else
+          echo "status=failed" >> $GITHUB_OUTPUT
+          echo "编译失败"
+          exit 1
+        fi
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
 
@@ -188,22 +187,28 @@ jobs:
         done
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
 
-    - name: Upload Firmware To Artifact(将固件上传到Artifact)
-      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
-      uses: actions/upload-artifact@main
-      with:
-        name: ${{ env.SOURCE_REPO }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE_PATH }}
+    - name: Debug Release Variables(调试Release变量)
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        echo "=== 调试信息 ==="
+        echo "FIRMWARE_RELEASE: ${{ env.FIRMWARE_RELEASE }}"
+        echo "FIRMWARE_TAG: ${{ env.FIRMWARE_TAG }}"
+        echo "FIRMWARE_PATH: ${{ env.FIRMWARE_PATH }}"
+        echo "DATE: ${{ env.DATE }}"
+        echo "=== 检查固件文件 ==="
+        ls -la "${{ env.FIRMWARE_PATH }}/"
+        echo "=== 检查 .bin 文件 ==="
+        ls -la "${{ env.FIRMWARE_PATH }}/*.bin"
+        echo "=== 检查标签是否存在 ==="
+        git tag -l "${{ env.FIRMWARE_TAG }}"
 
     - name: Upload Firmware To Release(发布固件)
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
-      uses: ncipollo/release-action@v1
+      uses: softprops/action-gh-release@v1
       with:
         name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
-        allowUpdates: true
-        tag: ${{ env.FIRMWARE_TAG }}
-        token: ${{ secrets.GITHUB_TOKEN }}
-        artifacts: ${{ env.FIRMWARE_PATH }}/*.bin
+        tag_name: ${{ env.FIRMWARE_TAG }}
+        files: ${{ env.FIRMWARE_PATH }}/*.bin
         body: |
           **This is OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}**
           ### 📒 固件信息
@@ -219,6 +224,54 @@ jobs:
           - 固件内核版本：**${{ env.VERSION_KERNEL }}**
           - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
           - ${{ env.VERSION_INFO }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create Release with GitHub CLI(使用GitHub CLI创建Release)
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true' && failure()
+      run: |
+        # 检查标签是否存在，如果存在则删除
+        if git tag -l "${{ env.FIRMWARE_TAG }}" | grep -q "${{ env.FIRMWARE_TAG }}"; then
+          echo "删除已存在的标签: ${{ env.FIRMWARE_TAG }}"
+          git tag -d "${{ env.FIRMWARE_TAG }}"
+          git push origin :refs/tags/${{ env.FIRMWARE_TAG }}
+        fi
+        
+        # 创建新标签
+        git tag "${{ env.FIRMWARE_TAG }}"
+        git push origin "${{ env.FIRMWARE_TAG }}"
+        
+        # 创建 Release
+        gh release create "${{ env.FIRMWARE_TAG }}" \
+          --title "${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}" \
+          --notes-file - \
+          "${{ env.FIRMWARE_PATH }}"/*.bin << 'EOF'
+**This is OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}**
+### 📒 固件信息
+- 这是开启全功能NSS的6.12内核固件，默认主题为Argon；该固件在ImmortalWrt的基础上，添加了额外的软件包，并添加了若干工具，具体详见对应机型的config。
+- 💻 这是 ${{ env.FIRMWARE_TAG }} 平台使用的 OpenWrt 固件
+- ⚽ 固件源码: ${{ env.REPO_URL }}
+- 💝 源码分支: ${{ env.REPO_BRANCH }}
+- 🌐 默认地址: **192.168.111.1**
+- 🔑 默认密码: none
+- 🚀 WiFi名称: **Star**
+- 🔑 WiFi密码: 12345678
+### 🧊 固件版本
+- 固件内核版本：**${{ env.VERSION_KERNEL }}**
+- 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
+- ${{ env.VERSION_INFO }}
+EOF
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload Firmware To Artifact(将固件上传到Artifact)
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ env.SOURCE_REPO }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE_PATH }}
 
     - name: Delete Old Cache(删除旧缓存)
       run: |

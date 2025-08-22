@@ -1,4 +1,4 @@
-name: ipq60xx-Immrt-Pro
+name: ipq60xx-ImmWrt-Pro
 
 on:
   workflow_dispatch:

@@ -140,13 +140,6 @@ jobs:
       if: (!cancelled())
       run: df -hT
 
-    - name: Upload Bin Directory(上传固件)
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      uses: actions/upload-artifact@main
-      with:
-        name: ${{ env.SOURCE_REPO }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
-        path: ${{ env.OPENWRT_PATH }}/bin
-
     - name: Organize Files(整理文件)
       if: steps.compile.outputs.status == 'success'
       run: |
@@ -158,55 +151,41 @@ jobs:
         mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages || true
         tar -zcf $FIRMWARE_TAG.Packages.tar.gz packages
         rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
-
-        # --- 新增：提取设备型号和配置类型 ---
-        # 从 .config 中提取设备型号 (例如: jdcloud_re-cs-02)
-        DEVICE_MODEL=$(grep -E '^CONFIG_TARGET_DEVICE_QUALCOMMAX_IPQ60XX_DEVICE_' $OPENWRT_PATH/.config | head -1 | cut -d'=' -f2 | tr -d '"')
-        echo "DEVICE_MODEL=$DEVICE_MODEL"
-
+        
         # 从 CONFIG_FILE 变量提取配置类型 (Pro/Max/Ultra)
-        # 使用 basename 获取文件名，然后去掉后缀 .config
         CONFIG_TYPE=$(basename "$CONFIG_FILE" .config)
         echo "CONFIG_TYPE=$CONFIG_TYPE"
-
-        # 从 DEVICE_MODEL 中提取型号部分 (例如: re-cs-02)
-        MODEL_PART=$(echo "$DEVICE_MODEL" | sed 's/.*_//')
-        echo "MODEL_PART=$MODEL_PART"
-
-        # --- 重命名固件文件 ---
+        
+        # --- 直接从文件名中提取设备型号并重命名 ---
         echo "重命名所有.bin文件"
         for file in *.bin; do
           if [ -f "$file" ]; then
-            # 获取原始文件名
             original_name="$file"
             echo "处理文件: $original_name"
-
-            # 根据文件名模式进行重命名
+            
+            # 从文件名中提取设备型号部分（如 jdcloud_re-cs-02 或 jdcloud-re-ss-01）
             if [[ "$original_name" == *"jdcloud_re-"* ]]; then
-              # 处理 jdcloud_re- 开头的文件
-              # 例如: immortalwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-factory.bin
-              # 目标: $REPO_SHORT-re-cs-02-squashfs-factory-$CONFIG_TYPE.bin
-              newname="${REPO_SHORT}-${MODEL_PART}-squashfs-factory-${CONFIG_TYPE}.bin"
+              # 提取设备型号部分，例如从 immortalwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-factory.bin 提取 re-cs-02
+              device_part=$(echo "$original_name" | sed -E 's/.*jdcloud_re-([a-zA-Z0-9_-]+)\.bin/\1/')
+              newname="${REPO_SHORT}-${device_part}.${CONFIG_TYPE}.bin"
               echo "重命名 $original_name 为 $newname"
               mv "$original_name" "$newname"
             elif [[ "$original_name" == *"jdcloud-"* ]]; then
-              # 处理 jdcloud- 开头的文件
-              # 例如: immortalwrt-qualcommax-ipq60xx-jdcloud-re-ss-01-squashfs-sysupgrade.bin
-              # 目标: $REPO_SHORT-re-ss-01-squashfs-sysupgrade-$CONFIG_TYPE.bin
-              newname="${REPO_SHORT}-${MODEL_PART}-squashfs-sysupgrade-${CONFIG_TYPE}.bin"
+              # 提取设备型号部分，例如从 immortalwrt-qualcommax-ipq60xx-jdcloud-re-ss-01-squashfs-sysupgrade.bin 提取 re-ss-01
+              device_part=$(echo "$original_name" | sed -E 's/.*jdcloud-([a-zA-Z0-9_-]+)\.bin/\1/')
+              newname="${REPO_SHORT}-${device_part}.${CONFIG_TYPE}.bin"
               echo "重命名 $original_name 为 $newname"
               mv "$original_name" "$newname"
             else
-              # 默认情况，尝试基于文件名提取并替换
-              # 例如: immortalwrt-qualcommax-ipq60xx-re-cs-02-squashfs-factory.bin
-              # 目标: $REPO_SHORT-re-cs-02-squashfs-factory-$CONFIG_TYPE.bin
-              newname=$(echo "$original_name" | sed "s/immortalwrt-qualcommax-ipq60xx-/$REPO_SHORT-/" | sed "s/-squashfs-/-$MODEL_PART-squashfs-/" | sed "s/\.bin$/-${CONFIG_TYPE}.bin/")
+              # 如果没有匹配到特定模式，使用默认方式
+              # 例如：immortalwrt-qualcommax-ipq60xx-re-cs-02-squashfs-factory.bin
+              # 变成：ImmWrt-re-cs-02-squashfs-factory-Pro.bin
+              newname="${REPO_SHORT}-$(echo "$original_name" | sed 's/immortalwrt-qualcommax-ipq60xx-//').${CONFIG_TYPE}.bin"
               echo "重命名 $original_name 为 $newname"
               mv "$original_name" "$newname"
             fi
           fi
         done
-
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
 
     - name: Upload Firmware To Artifact(将固件上传到Artifact)
@@ -218,13 +197,13 @@ jobs:
 
     - name: Upload Firmware To Release(发布固件)
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
-      uses: ncipollo/release-action@main
+      uses: ncipollo/release-action@v1
       with:
         name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
         allowUpdates: true
         tag: ${{ env.FIRMWARE_TAG }}
         token: ${{ secrets.GITHUB_TOKEN }}
-        artifacts: ${{ env.FIRMWARE_PATH }}/*
+        artifacts: ${{ env.FIRMWARE_PATH }}/*.bin
         body: |
           **This is OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}**
           ### 📒 固件信息

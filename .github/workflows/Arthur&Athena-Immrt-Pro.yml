@@ -1,34 +1,36 @@
-name: AA.Chatbox
+name: Arthur&Athena-Immrt-Pro
 
 on:
   workflow_dispatch:
   workflow_call:
+  schedule:
+    - cron: 0 16 * * 4
 
 env:
-  FIRMWARE_TAG: ipq60xx.Chatbox
+  REPO_URL: https://github.com/laipeng668/immortalwrt.git
+  REPO_BRANCH: master
+  REPO_SHORT: ImmWrt
+  #REPO_URL: https://github.com/laipeng668/openwrt.git
+  #REPO_BRANCH: master
+  #REPO_SHORT: OpenWrt
+  #REPO_URL: https://github.com/laipeng668/immortalwrt.git
+  #REPO_BRANCH: master
+  #REPO_SHORT: LibWrt
+  CONFIG_FILE: configs/ipq60xx_Pro.config
+  #CONFIG_FILE: configs/ipq60xx_Max.config
+  #CONFIG_FILE: configs/ipq60xx_Ultra.config
+  #GENERAL_CONFIG_FILE: configs/General.config
+  DIY_SCRIPT: scripts/Script.sh
+  CLASH_KERNEL: amd64
+  UPLOAD_BIN_DIR: false
+  FIRMWARE_RELEASE: true
+  FIRMWARE_TAG: ipq60xx
   TZ: Asia/Shanghai
 
 jobs:
   Build:
     runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        REPO_SHORT: ['ImmWrt', 'OpenWrt', 'LibWrt']
-        CONFIG_TYPE: ['Max', 'Pro', 'Ultra']
-        include:
-          - REPO_SHORT: 'ImmWrt'
-            REPO_URL: 'https://github.com/laipeng668/immortalwrt.git'
-            REPO_BRANCH: 'master'
-          - REPO_SHORT: 'OpenWrt'
-            REPO_URL: 'https://github.com/laipeng668/openwrt.git'
-            REPO_BRANCH: 'master'
-          - REPO_SHORT: 'LibWrt'
-            REPO_URL: 'https://github.com/laipeng668/openwrt-6.x.git'
-            REPO_BRANCH: 'k6.12-nss'
 
-    name: Build ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}
-    
     steps:
     - name: Check Server Performance(检查服务器性能)
       run: |
@@ -63,7 +65,7 @@ jobs:
         df -hT $GITHUB_WORKSPACE
         sudo mkdir -p /mnt/openwrt
         sudo chown -R $(id -u):$(id -g) /mnt/openwrt
-        git clone --depth 1 -b ${{ matrix.REPO_BRANCH }} --single-branch ${{ matrix.REPO_URL }} /mnt/openwrt
+        git clone --depth 1 -b $REPO_BRANCH --single-branch $REPO_URL /mnt/openwrt
         cd /mnt/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
         VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
@@ -73,10 +75,10 @@ jobs:
 
     - name: Generate Variables(生成变量)
       run: |
-        cp $GITHUB_WORKSPACE/configs/ipq60xx_${{ matrix.CONFIG_TYPE }}.config $OPENWRT_PATH/.config
+        cp $CONFIG_FILE $OPENWRT_PATH/.config
         cd $OPENWRT_PATH
         make defconfig > /dev/null 2>&1
-        SOURCE_REPO="$(echo ${{ matrix.REPO_URL }} | awk -F '/' '{print $(NF)}')"
+        SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
         echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
         DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
         echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
@@ -85,20 +87,11 @@ jobs:
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
         echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
 
-    - name: Merge Config for LibWrt
-      if: matrix.REPO_SHORT == 'LibWrt'
-      run: |
-        cd $OPENWRT_PATH
-        cat $GITHUB_WORKSPACE/configs/ipq60xx_${{ matrix.CONFIG_TYPE }}.config $GITHUB_WORKSPACE/configs/LibWrt.config > .config
-        make defconfig > /dev/null 2>&1
-        echo "合并后的配置文件内容："
-        cat .config
-
     - name: Cache Toolchain(缓存工具链)
       uses: actions/cache@main
       with:
-        key: ${{ matrix.REPO_SHORT }}-${{ matrix.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
-        restore-keys: ${{ matrix.REPO_SHORT }}-${{ matrix.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
+        key: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
+        restore-keys: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
         path: |
           ${{ env.OPENWRT_PATH }}/.ccache
           ${{ env.OPENWRT_PATH }}/staging_dir
@@ -119,9 +112,11 @@ jobs:
   
     - name: Load Custom Configuration(加载自定义配置)
       run: |
-        chmod +x scripts/Script.sh
+        cat $CONFIG_FILE > $OPENWRT_PATH/.config
+        chmod +x $DIY_SCRIPT
         cd $OPENWRT_PATH
-        $GITHUB_WORKSPACE/scripts/Script.sh
+        # 运行自定义脚本
+        $GITHUB_WORKSPACE/$DIY_SCRIPT
 
     - name: Download DL Package(下载DL软件包)
       run: |
@@ -140,69 +135,89 @@ jobs:
         echo "status=success" >> $GITHUB_OUTPUT
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
-        echo "UNIQUE_ID=$(date +"%H%M%S")" >> $GITHUB_ENV
 
     - name: Check Space Usage(检查空间使用情况)
       if: (!cancelled())
       run: df -hT
 
     - name: Upload Bin Directory(上传固件)
-      if: steps.compile.outputs.status == 'success'
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       uses: actions/upload-artifact@main
       with:
-        name: ${{ matrix.REPO_SHORT }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
+        name: ${{ env.SOURCE_REPO }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
         path: ${{ env.OPENWRT_PATH }}/bin
 
     - name: Organize Files(整理文件)
       if: steps.compile.outputs.status == 'success'
       run: |
         cd $OPENWRT_PATH/bin/targets/*/*
-        # 列出文件和目录清单
-        ls -la > $OPENWRT_PATH/oplist.txt
-        echo "文件和目录清单："
-        cat $OPENWRT_PATH/oplist.txt
-        
-        # 重命名配置文件
-        mv $OPENWRT_PATH/.config ${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config || true
-        echo "重命名配置文件: ${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config"
-        
-        # 重命名buildinfo文件
-        mv config.buildinfo ${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.buildinfo || true
-        echo "重命名buildinfo文件: ${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.buildinfo"
-        
-        # 打包ipk和apk包
-        mkdir -p packages
-        mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/ || true
-        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages/ || true
-        tar -zcf ipq60xx.Packages.tar.gz packages
-        echo "打包包文件: ipq60xx.Packages.tar.gz"
-        
-        # 重命名固件文件
+        cp $OPENWRT_PATH/.config $FIRMWARE_TAG.config || true
+        mv config.buildinfo $FIRMWARE_TAG.config.buildinfo || true
+        mv immortalwrt-qualcommax-ipq60xx.manifest ipq60xx.manifest || true
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages || true
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages || true
+        tar -zcf $FIRMWARE_TAG.Packages.tar.gz packages
+        rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
+
+        # --- 新增：提取设备型号和配置类型 ---
+        # 从 .config 中提取设备型号 (例如: jdcloud_re-cs-02)
+        DEVICE_MODEL=$(grep -E '^CONFIG_TARGET_DEVICE_QUALCOMMAX_IPQ60XX_DEVICE_' $OPENWRT_PATH/.config | head -1 | cut -d'=' -f2 | tr -d '"')
+        echo "DEVICE_MODEL=$DEVICE_MODEL"
+
+        # 从 CONFIG_FILE 变量提取配置类型 (Pro/Max/Ultra)
+        # 使用 basename 获取文件名，然后去掉后缀 .config
+        CONFIG_TYPE=$(basename "$CONFIG_FILE" .config)
+        echo "CONFIG_TYPE=$CONFIG_TYPE"
+
+        # 从 DEVICE_MODEL 中提取型号部分 (例如: re-cs-02)
+        MODEL_PART=$(echo "$DEVICE_MODEL" | sed 's/.*_//')
+        echo "MODEL_PART=$MODEL_PART"
+
+        # --- 重命名固件文件 ---
+        echo "重命名所有.bin文件"
         for file in *.bin; do
           if [ -f "$file" ]; then
-            # 使用sed替换文件名中的"immortalwrt"为"ImmWrt-Pro"
-            new_name=$(echo "$file" | sed "s/immortalwrt/${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}/g")
-            mv "$file" "$new_name"
-            echo "重命名固件文件: $file -> $new_name"
+            # 获取原始文件名
+            original_name="$file"
+            echo "处理文件: $original_name"
+
+            # 根据文件名模式进行重命名
+            if [[ "$original_name" == *"jdcloud_re-"* ]]; then
+              # 处理 jdcloud_re- 开头的文件
+              # 例如: immortalwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-factory.bin
+              # 目标: $REPO_SHORT-re-cs-02-squashfs-factory-$CONFIG_TYPE.bin
+              newname="${REPO_SHORT}-${MODEL_PART}-squashfs-factory-${CONFIG_TYPE}.bin"
+              echo "重命名 $original_name 为 $newname"
+              mv "$original_name" "$newname"
+            elif [[ "$original_name" == *"jdcloud-"* ]]; then
+              # 处理 jdcloud- 开头的文件
+              # 例如: immortalwrt-qualcommax-ipq60xx-jdcloud-re-ss-01-squashfs-sysupgrade.bin
+              # 目标: $REPO_SHORT-re-ss-01-squashfs-sysupgrade-$CONFIG_TYPE.bin
+              newname="${REPO_SHORT}-${MODEL_PART}-squashfs-sysupgrade-${CONFIG_TYPE}.bin"
+              echo "重命名 $original_name 为 $newname"
+              mv "$original_name" "$newname"
+            else
+              # 默认情况，尝试基于文件名提取并替换
+              # 例如: immortalwrt-qualcommax-ipq60xx-re-cs-02-squashfs-factory.bin
+              # 目标: $REPO_SHORT-re-cs-02-squashfs-factory-$CONFIG_TYPE.bin
+              newname=$(echo "$original_name" | sed "s/immortalwrt-qualcommax-ipq60xx-/$REPO_SHORT-/" | sed "s/-squashfs-/-$MODEL_PART-squashfs-/" | sed "s/\.bin$/-${CONFIG_TYPE}.bin/")
+              echo "重命名 $original_name 为 $newname"
+              mv "$original_name" "$newname"
+            fi
           fi
         done
-        
+
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
 
-    - name: Upload Artifacts
-      if: steps.compile.outputs.status == 'success'
+    - name: Upload Firmware To Artifact(将固件上传到Artifact)
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
       uses: actions/upload-artifact@main
       with:
-        name: ipq60xx-Packages-${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }}-${{ env.FILE_DATE }}-${{ env.UNIQUE_ID }}
-        path: |
-          ${{ env.OPENWRT_PATH }}/oplist.txt
-          ${{ matrix.REPO_SHORT }}_${{ matrix.CONFIG_TYPE }}.config
-          ${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}.buildinfo
-          ipq60xx.Packages.tar.gz
-          ${{ matrix.REPO_SHORT }}${{ matrix.CONFIG_TYPE }}_*.bin
+        name: ${{ env.SOURCE_REPO }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE_PATH }}
 
     - name: Upload Firmware To Release(发布固件)
-      if: steps.compile.outputs.status == 'success'
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
       uses: ncipollo/release-action@main
       with:
         name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
@@ -213,23 +228,23 @@ jobs:
         body: |
           **This is OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}**
           ### 📒 固件信息
-          - 这是开启全功能NSS的6.12内核固件，默认主题为Argon；该固件在ImmortalWrt的基础上，添加了额外的软件包cpufreq、ddns、ttyd、upnp、wolplus、samba4、vlmcsd、aria2、autoreboot、uhttpd、wifischedule、frps、frpc、diskman、hd-idle、banip、acme、arpbind、usb-printer、homeproxy、openlist、adguardhome、oaf、sqm、wireguard、watchcat、3cat（**Taiyi**额外增加了filebrowser、dockerman、gecoosac、lucky），并添加了若干工具，具体详见对应机型的config。
-          - 💻 这是 ${{ matrix.REPO_SHORT }}-${{ matrix.CONFIG_TYPE }} 平台使用的 OpenWrt 固件
-          - ⚽ 固件源码: ${{ matrix.REPO_URL }}
-          - 💝 源码分支: ${{ matrix.REPO_BRANCH }}
-          - 🌐 默认地址: **192.168.2.1**
+          - 这是开启全功能NSS的6.12内核固件，默认主题为Argon；该固件在ImmortalWrt的基础上，添加了额外的软件包，并添加了若干工具，具体详见对应机型的config。
+          - 💻 这是 ${{ env.FIRMWARE_TAG }} 平台使用的 OpenWrt 固件
+          - ⚽ 固件源码: ${{ env.REPO_URL }}
+          - 💝 源码分支: ${{ env.REPO_BRANCH }}
+          - 🌐 默认地址: **192.168.111.1**
           - 🔑 默认密码: none
           - 🚀 WiFi名称: **Star**
           - 🔑 WiFi密码: 12345678
           ### 🧊 固件版本
           - 固件内核版本：**${{ env.VERSION_KERNEL }}**
-          - 固件编译前最后一次➦[主源码](${{ matrix.REPO_URL }})更新记录
+          - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
           - ${{ env.VERSION_INFO }}
 
     - name: Delete Old Cache(删除旧缓存)
       run: |
         # 获取缓存列表并删除
-        gh cache list --key ${{ matrix.REPO_SHORT }}-${{ matrix.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key --jq '.[] | .key' | while read -r key; do
+        gh cache list --key ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key --jq '.[] | .key' | while read -r key; do
           gh cache delete "$key"
         done
         # 输出缓存状态

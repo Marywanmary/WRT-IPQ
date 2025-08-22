@@ -1,0 +1,255 @@
+name: AAA - Optimized OpenWrt Build & Release
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches:
+      - main
+
+env:
+  FIRMWARE_TAG: ipq60xx.AAA
+  TZ: Asia/Shanghai
+  CLASH_KERNEL: amd64
+  UPLOAD_BIN_DIR: false
+  FIRMWARE_RELEASE: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.repo.repo_short }}-${{ matrix.config_type }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        repo:
+          - repo_short: "ImmWrt"
+            repo_url: "https://github.com/laipeng668/immortalwrt.git"
+            repo_branch: "master"
+          - repo_short: "OpenWrt"
+            repo_url: "https://github.com/laipeng668/openwrt.git"
+            repo_branch: "master"
+          - repo_short: "LibWrt"
+            repo_url: "https://github.com/laipeng668/openwrt-6.x.git"
+            repo_branch: "k6.12-nss"
+        config_type: ["Pro", "Max", "Ultra"]
+
+    env:
+      REPO_SHORT: ${{ matrix.repo.repo_short }}
+      REPO_URL: ${{ matrix.repo.repo_url }}
+      REPO_BRANCH: ${{ matrix.repo.repo_branch }}
+      CONFIG_TYPE: ${{ matrix.config_type }}
+      OPENWRT_PATH: ${{ github.workspace }}/openwrt
+      WORKSPACE: ${{ github.workspace }}
+
+    steps:
+      - name: Check Server Performance
+        run: |
+          echo "⚠️ 警告：服务器性能有限，插件过多可能影响编译"
+          echo "已知CPU型号（降序）：7763，8370C，8272CL，8171M，E5-2673"
+          echo "--------------------------CPU信息--------------------------"
+          echo "CPU物理数量：$(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
+          echo "CPU核心信息：$(cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c)"
+          echo "--------------------------内存信息--------------------------"
+          echo "已安装内存：$(sudo lshw -short -C memory | grep GiB)"
+          echo "--------------------------硬盘信息--------------------------"
+          echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)"
+          df -hT
+
+      - name: Initialization Environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -y update
+          sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
+          sudo -E systemctl daemon-reload
+          sudo -E apt-get -y autoremove --purge
+          sudo -E apt-get -y clean
+          sudo timedatectl set-timezone "$TZ"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clone Source Code
+        run: |
+          git clone --depth 1 -b ${{ matrix.repo.repo_branch }} --single-branch ${{ matrix.repo.repo_url }} ${{ env.OPENWRT_PATH }}
+          cd ${{ env.OPENWRT_PATH }}
+          echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+          echo "VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")" >> $GITHUB_ENV
+          echo "VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12)" >> $GITHUB_ENV
+
+      - name: Generate Variables
+        run: |
+          cp ${{ env.WORKSPACE }}/configs/ipq60xx_${{ matrix.config_type }}.config ${{ env.OPENWRT_PATH }}/.config
+          cd ${{ env.OPENWRT_PATH }}
+          make defconfig > /dev/null 2>&1
+          echo "SOURCE_REPO=$(echo ${{ matrix.repo.repo_url }} | awk -F '/' '{print $(NF)}')" >> $GITHUB_ENV
+          echo "DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')" >> $GITHUB_ENV
+          echo "DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')" >> $GITHUB_ENV
+          echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
+          echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+
+      - name: Merge Config for LibWrt
+        if: matrix.repo.repo_short == 'LibWrt'
+        run: |
+          cd ${{ env.OPENWRT_PATH }}
+          cat ${{ env.WORKSPACE }}/configs/ipq60xx_${{ matrix.config_type }}.config ${{ env.WORKSPACE }}/configs/LibWrt.config > .config
+          make defconfig > /dev/null 2>&1
+
+      - name: Cache Toolchain
+        uses: actions/cache@v4
+        with:
+          key: ${{ matrix.repo.repo_short }}-${{ matrix.repo.repo_branch }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.HASH }}-${{ env.CACHE_DATE }}
+          restore-keys: ${{ matrix.repo.repo_short }}-${{ matrix.repo.repo_branch }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
+          path: |
+            ${{ env.OPENWRT_PATH }}/.ccache
+            ${{ env.OPENWRT_PATH }}/staging_dir
+
+      - name: Refresh Cache
+        run: |
+          if [ -d "${{ env.OPENWRT_PATH }}/staging_dir" ]; then
+            find "${{ env.OPENWRT_PATH }}/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
+              find "$dir" -type f -exec touch {} +
+            done
+          fi
+
+      - name: Install Feeds
+        run: |
+          cd ${{ env.OPENWRT_PATH }}
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Load Custom Configuration
+        run: |
+          chmod +x ${{ env.WORKSPACE }}/scripts/Script.sh
+          cd ${{ env.OPENWRT_PATH }}
+          ${{ env.WORKSPACE }}/scripts/Script.sh
+
+      - name: Download Packages
+        run: |
+          cd ${{ env.OPENWRT_PATH }}
+          make defconfig
+          make download -j$(nproc)
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Compile Firmware
+        id: compile
+        run: |
+          cd ${{ env.OPENWRT_PATH }}
+          echo -e "$(nproc) thread compile"
+          make -j$(nproc) || make -j1 || make -j1 V=s
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+          echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+
+      - name: Check Space Usage
+        if: (!cancelled())
+        run: df -hT
+
+      - name: Organize Files
+        if: steps.compile.outputs.status == 'success'
+        run: |
+          set -euo pipefail
+          cd ${{ env.OPENWRT_PATH }}
+          
+          # 创建文件清单
+          echo "===== OpenWrt文件清单 =====" > oplist.txt
+          ls -laR >> oplist.txt
+          
+          # 处理目标目录
+          for target_dir in bin/targets/*/*; do
+            [ -d "$target_dir" ] || continue
+            pushd "$target_dir" >/dev/null
+            
+            # 重命名配置文件
+            cp ${{ env.OPENWRT_PATH }}/.config ${{ matrix.repo.repo_short }}_${{ matrix.config_type }}.config
+            
+            # 重命名buildinfo
+            mv config.buildinfo ${{ matrix.repo.repo_short }}${{ matrix.config_type }}.buildinfo
+            
+            # 打包软件包
+            mkdir -p packages
+            find ${{ env.OPENWRT_PATH }}/bin/packages -type f \( -name '*.ipk' -o -name '*.apk' \) -exec cp {} packages/ \;
+            tar -zcf ipq60xx.Packages.tar.gz packages
+            
+            # 重命名固件文件
+            for file in *.bin; do
+              [ -f "$file" ] || continue
+              if [[ "$file" =~ -ipq60xx-(.+)\.bin$ ]]; then
+                base_name="${BASH_REMATCH[1]}"
+                new_name="${base_name}-${{ matrix.repo.repo_short }}-${{ matrix.config_type }}.bin"
+                mv "$file" "$new_name"
+              fi
+            done
+            
+            # 清理不需要的文件
+            rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
+            
+            popd >/dev/null
+            echo "FIRMWARE_PATH=$(pwd)/$target_dir" >> $GITHUB_ENV
+          done
+
+      - name: Upload Artifacts
+        if: steps.compile.outputs.status == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.repo.repo_short }}-${{ matrix.config_type }}-${{ env.FILE_DATE }}
+          path: |
+            ${{ env.OPENWRT_PATH }}/oplist.txt
+            ${{ env.FIRMWARE_PATH }}/${{ matrix.repo.repo_short }}_${{ matrix.config_type }}.config
+            ${{ env.FIRMWARE_PATH }}/${{ matrix.repo.repo_short }}${{ matrix.config_type }}.buildinfo
+            ${{ env.FIRMWARE_PATH }}/ipq60xx.Packages.tar.gz
+            ${{ env.FIRMWARE_PATH }}/*.bin
+
+      - name: Delete Old Cache
+        run: |
+          gh cache list --key ${{ matrix.repo.repo_short }}-${{ matrix.repo.repo_branch }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key --jq '.[] | .key' | while read -r key; do
+            gh cache delete "$key"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: env.FIRMWARE_RELEASE == 'true'
+    
+    steps:
+      - name: Set Release Date
+        run: echo "RELEASE_DATE=$(date -u +%F)" >> $GITHUB_ENV
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare Release Assets
+        run: |
+          mkdir -p release_assets
+          for dir in artifacts/*; do
+            [ -d "$dir" ] || continue
+            find "$dir" -type f -exec cp {} release_assets/ \;
+          done
+
+      - name: Create Release
+        uses: ncipollo/release-action@v1
+        with:
+          name: ${{ env.RELEASE_DATE }} for ${{ env.FIRMWARE_TAG }}
+          tag: ${{ env.FIRMWARE_TAG }}
+          allowUpdates: true
+          artifacts: release_assets/*
+          body: |
+            **OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}**
+            
+            ### 📒 固件信息
+            - 这是开启全功能NSS的6.12内核固件，默认主题为Argon
+            - 添加了额外软件包：cpufreq、ddns、ttyd、upnp、wolplus、samba4、vlmcsd、aria2、autoreboot、uhttpd、wifischedule、frps、frpc、diskman、hd-idle、banip、acme、arpbind、usb-printer、homeproxy、openlist、adguardhome、oaf、sqm、wireguard、watchcat、3cat
+            - 🌐 默认地址: **192.168.2.1**
+            - 🔑 默认密码: none
+            - 🚀 WiFi名称: **Star**
+            - 🔑 WiFi密码: 12345678
+            
+            ### 🧊 固件版本
+            - 内核版本：**${{ env.VERSION_KERNEL }}**
+            - 源码更新记录：${{ env.VERSION_INFO }}

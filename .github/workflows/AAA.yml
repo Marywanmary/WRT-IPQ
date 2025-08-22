@@ -84,9 +84,9 @@ jobs:
           echo "加载基础配置文件: $CONFIG_FILE"
           cp "$CONFIG_FILE" ${{ env.OPENWRT_PATH }}/.config
           
-          # 显示基础配置内容（前50行）
-          echo "===== 基础配置文件内容（前50行） ====="
-          head -n 50 "$CONFIG_FILE"
+          # 显示基础配置内容（前500行）
+          echo "===== 基础配置文件内容（前500行） ====="
+          head -n 500 "$CONFIG_FILE"
 
       - name: Merge Config for LibWrt
         if: matrix.repo.repo_short == 'LibWrt'

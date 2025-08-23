@@ -1,0 +1,315 @@
+name: ipq60xx-Matrix-Build2
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: 0 16 * * 4  # 每周四16点触发
+
+permissions:
+  contents: write
+
+env:
+  TZ: Asia/Shanghai
+  FIRMWARE_TAG: ipq60xx
+
+jobs:
+  Build:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        repo:
+          - name: ImmWrt
+            url: https://github.com/laipeng668/immortalwrt.git
+            branch: master
+          - name: OpenWrt
+            url: https://github.com/laipeng668/openwrt.git
+            branch: master
+          - name: LibWrt
+            url: https://github.com/laipeng668/openwrt-6.x
+            branch: k6.12-nss
+        config:
+          - name: Pro
+            file: configs/ipq60xx_Pro.config
+          - name: Max
+            file: configs/ipq60xx_Max.config
+          - name: Ultra
+            file: configs/ipq60xx_Ultra.config
+      max-parallel: 9
+    
+    steps:
+    - name: Checkout and Initialize
+      uses: actions/checkout@v4
+      run: |
+        # 初始化环境并安装依赖
+        sudo apt-get update && sudo apt-get install -y $(curl -fsSL is.gd/depends_ubuntu_2204)
+        sudo systemctl daemon-reload && sudo apt-get autoremove --purge && sudo apt-get clean
+        sudo timedatectl set-timezone "$TZ"
+
+    - name: Clone Source Code
+      env:
+        REPO_URL: ${{ matrix.repo.url }}
+        REPO_BRANCH: ${{ matrix.repo.branch }}
+      run: |
+        set -e
+        df -hT "$GITHUB_WORKSPACE"
+        sudo mkdir -p /mnt/openwrt
+        sudo chown -R "$(id -u):$(id -g)" /mnt/openwrt
+        git clone --depth 1 -b "$REPO_BRANCH" --single-branch "$REPO_URL" /mnt/openwrt
+        cd /mnt/openwrt
+        echo "OPENWRT_PATH=$PWD" >> "$GITHUB_ENV"
+        VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
+        echo "VERSION_INFO=$VERSION_INFO" >> "$GITHUB_ENV"
+        VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12 || echo "6.12")
+        echo "VERSION_KERNEL=$VERSION_KERNEL" >> "$GITHUB_ENV"
+
+    - name: Prepare Configuration
+      env:
+        REPO_URL: ${{ matrix.repo.url }}
+        REPO_BRANCH: ${{ matrix.repo.branch }}
+        REPO_SHORT: ${{ matrix.repo.name }}
+        CONFIG_FILE: ${{ matrix.config.file }}
+      run: |
+        set -e
+        echo "CONFIG_FILE=$CONFIG_FILE" >> "$GITHUB_ENV"
+        SOURCE_REPO=$(echo "$REPO_URL" | awk -F '/' '{print $(NF)}')
+        echo "SOURCE_REPO=$SOURCE_REPO" >> "$GITHUB_ENV"
+        echo "CONFIG_TYPE=$(basename "$CONFIG_FILE" .config)" >> "$GITHUB_ENV"
+        
+        # LibWrt特殊处理：合并配置文件
+        if [[ "$REPO_SHORT" == "LibWrt" ]]; then
+          MERGED_CONFIG="$GITHUB_WORKSPACE/merged_${CONFIG_TYPE}.config"
+          echo "合并配置文件: $CONFIG_FILE + configs/LibWrt.config"
+          
+          [[ -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ]] || { echo "错误: 特定配置文件 $CONFIG_FILE 不存在"; exit 1; }
+          [[ -f "$GITHUB_WORKSPACE/configs/LibWrt.config" ]] || { echo "错误: 基础配置文件 configs/LibWrt.config 不存在"; exit 1; }
+          
+          cat "$GITHUB_WORKSPACE/$CONFIG_FILE" > "$MERGED_CONFIG"
+          cat "$GITHUB_WORKSPACE/configs/LibWrt.config" >> "$MERGED_CONFIG"
+          echo "CONFIG_FILE=$MERGED_CONFIG" >> "$GITHUB_ENV"
+          echo "合并后配置文件大小: $(wc -c < "$MERGED_CONFIG") 字节"
+          echo "合并后配置文件行数: $(wc -l < "$MERGED_CONFIG") 行"
+        fi
+
+    - name: Load Configuration and Build
+      env:
+        CONFIG_FILE: ${{ env.CONFIG_FILE }}
+        DIY_SCRIPT: scripts/Script.sh
+      run: |
+        set -e
+        # 加载配置
+        [[ -f "$CONFIG_FILE" ]] || { echo "错误: 配置文件 $CONFIG_FILE 不存在"; exit 1; }
+        cat "$CONFIG_FILE" > "$OPENWRT_PATH/.config"
+        chmod +x "$DIY_SCRIPT"
+        cd "$OPENWRT_PATH"
+        
+        # 运行自定义脚本
+        "$GITHUB_WORKSPACE/$DIY_SCRIPT"
+        
+        # 生成变量
+        make defconfig >/dev/null 2>&1
+        echo "HASH=$(git log -1 --pretty=format:'%h')" >> "$GITHUB_ENV"
+        
+        # 安装feeds
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        
+        # 下载软件包
+        make defconfig
+        make download -j"$(nproc)"
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+        
+        # 编译固件
+        echo "$(nproc) thread compile"
+        if make -j"$(nproc)" || make -j1 || make -j1 V=s; then
+          echo "status=success" >> "$GITHUB_OUTPUT"
+          echo "编译成功完成"
+        else
+          echo "status=failed" >> "$GITHUB_OUTPUT"
+          echo "编译失败"
+          exit 1
+        fi
+        echo "DATE=$(date +'%Y-%m-%d %H:%M:%S')" >> "$GITHUB_ENV"
+        echo "FILE_DATE=$(date +'%Y.%m.%d')" >> "$GITHUB_ENV"
+
+    - name: Cache Toolchain
+      uses: actions/cache@v4
+      with:
+        key: ${{ matrix.repo.name }}-${{ env.HASH }}-${{ matrix.config.name }}
+        restore-keys: |
+          ${{ matrix.repo.name }}-
+        path: |
+          ${{ env.OPENWRT_PATH }}/.ccache
+          ${{ env.OPENWRT_PATH }}/staging_dir
+
+    - name: Refresh Cache
+      run: |
+        [[ -d "$OPENWRT_PATH/staging_dir" ]] && find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" -exec find {} -type f -exec touch {} + \;
+
+    - name: Process and Upload Artifacts
+      if: steps.compile.outputs.status == 'success'
+      env:
+        REPO_SHORT: ${{ matrix.repo.name }}
+        CONFIG_TYPE: ${{ env.CONFIG_TYPE }}
+      run: |
+        set -e
+        cd "$OPENWRT_PATH/bin/targets/*/*"
+        
+        # 重命名配置和清单文件
+        mv "$FIRMWARE_TAG.config" "$REPO_SHORT-$CONFIG_TYPE.config" || true
+        mv "$FIRMWARE_TAG.config.buildinfo" "$REPO_SHORT-$CONFIG_TYPE.config.buildinfo" || true
+        mv ipq60xx.manifest "$REPO_SHORT-$CONFIG_TYPE.manifest" || true
+        
+        # 收集和打包软件包
+        mkdir -p packages-temp
+        mv -f "$OPENWRT_PATH/bin/packages/*/*/*.apk" packages-temp/ 2>/dev/null || true
+        mv -f "$OPENWRT_PATH/bin/packages/*/*/*.ipk packages-temp/ 2>/dev/null || true
+        [[ -d "packages-temp" && $(ls -A packages-temp) ]] && tar -zcf "$REPO_SHORT-$CONFIG_TYPE-packages.tar.gz" -C packages-temp && rm -rf packages-temp
+        
+        # 重命名固件文件
+        for file in *.bin; do
+          [[ -f "$file" ]] || continue
+          original_name="$file"
+          echo "处理文件: $original_name"
+          
+          # 简化的文件名解析
+          name_without_suffix="${original_name%.bin}"
+          if [[ "$name_without_suffix" == *"-squashfs-"* ]]; then
+            device_part="${name_without_suffix%%-squashfs-*}"
+            firmware_type="${name_without_suffix#*-squashfs-}"
+          else
+            device_part="${name_without_suffix%-*}"
+            firmware_type="${name_without_suffix##*-}"
+          fi
+          
+          # 清理前缀
+          device_part="${device_part#jdcloud_re-}"
+          device_part="${device_part#jdcloud-}"
+          device_part="${device_part#immortalwrt-qualcommax-ipq60xx-}"
+          
+          # 构建新文件名（如果解析失败则使用原始文件名）
+          if [[ -z "$device_part" || -z "$firmware_type" ]]; then
+            echo "警告: 无法解析文件名，使用原始文件名"
+            newname="${REPO_SHORT}-${original_name%.bin}-${CONFIG_TYPE}.bin"
+          else
+            newname="${REPO_SHORT}-${device_part}-${firmware_type}-${CONFIG_TYPE}.bin"
+          fi
+          
+          echo "重命名 $original_name 为 $newname"
+          mv "$original_name" "$newname"
+        done
+        
+        echo "FIRMWARE_PATH=$PWD" >> "$GITHUB_ENV"
+
+    - name: Upload Artifacts
+      if: steps.compile.outputs.status == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-${{ matrix.repo.name }}-${{ matrix.config.name }}
+        path: |
+          ${{ env.FIRMWARE_PATH }}/*.bin
+          ${{ env.FIRMWARE_PATH }}/*.config
+          ${{ env.FIRMWARE_PATH }}/*.config.buildinfo
+          ${{ env.FIRMWARE_PATH }}/*.manifest
+          ${{ env.FIRMWARE_PATH }}/*-packages.tar.gz
+        retention-days: 14
+
+    - name: Check Space Usage
+      if: (!cancelled())
+      run: df -hT
+
+  # 检查构建结果并创建Release
+  Create-Release:
+    needs: Build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check Build Results
+      id: check-builds
+      run: |
+        echo "检查构建结果..."
+        all_builds_success=true
+        
+        # 检查每个矩阵组合的构建状态
+        for repo in ImmWrt OpenWrt LibWrt; do
+          for config in Pro Max Ultra; do
+            job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq \
+              --arg name "Build ($repo, $config)" \
+              '.jobs[] | select(.name == $name) | .status')
+            echo "作业 Build ($repo, $config) 状态: $job_status"
+            
+            [[ "$job_status" == "success" ]] || all_builds_success=false
+          done
+        done
+        
+        echo "all_builds_success=$all_builds_success" >> "$GITHUB_OUTPUT"
+        
+        [[ "$all_builds_success" == "false" ]] && echo "失败的构建作业:" && \
+        for repo in ImmWrt OpenWrt LibWrt; do
+          for config in Pro Max Ultra; do
+            job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq \
+              --arg name "Build ($repo, $config)" \
+              '.jobs[] | select(.name == $name) | .status')
+            [[ "$job_status" != "success" ]] && echo "- Build ($repo, $config) (状态: $job_status)"
+          done
+        done
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Generate Release Tag
+      id: tag
+      if: steps.check-builds.outputs.all_builds_success == 'true'
+      run: echo "tag=ipq60xx-$(date +'%Y%m%d-%H%M%S')-$(echo "$RANDOM" | cut -c1-4)" >> "$GITHUB_OUTPUT
+
+    - name: Download and Prepare Release
+      if: steps.check-builds.outputs.all_builds_success == 'true'
+      run: |
+        set -e
+        mkdir -p release-files
+        
+        # 下载所有artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+          merge-multiple: false
+        
+        # 创建Release信息文件
+        echo "## ipq60xx 固件发布" > release-info.md
+        echo "" >> release-info.md
+        echo "**发布日期**: $(date +'%Y-%m-%d %H:%M:%S')" >> release-info.md
+        echo "" >> release-info.md
+        echo "### 固件列表" >> release-info.md
+        echo "" >> release-info.md
+        echo "| 仓库 | 配置 | 设备 | 类型 | 文件名 |" >> release-info.md
+        echo "|------|------|------|------|--------|" >> release-info.md
+        
+        # 处理固件文件
+        find all-artifacts -name "*.bin" | while read file; do
+          filename=$(basename "$file")
+          repo=$(echo "$filename" | cut -d'-' -f1)
+          device=$(echo "$filename" | cut -d'-' -f2-3 | tr '-' ' ')
+          type=$(echo "$filename" | cut -d'-' -f4)
+          config=$(echo "$filename" | cut -d'-' -f5 | cut -d'.' -f1)
+          
+          cp "$file" release-files/
+          echo "| $repo | $config | $device | $type | $filename |" >> release-info.md
+        done
+        
+        # 收集配置和清单文件
+        find all-artifacts -name "*.config" ! -name "*packages*" -exec cp {} release-files/ \;
+        find all-artifacts -name "*.config.buildinfo" -exec cp {} release-files/ \;
+        find all-artifacts -name "*.manifest" -exec cp {} release-files/ \;
+        
+        # 合并软件包
+        echo "### 软件包信息" >> release-info.md
+        echo "" >> release-info.md
+        echo "本Release包含以下软件包（已剔除重复项）：" >> release-info.md
+        echo "" >> release-info.md
+        echo "| 软件包名 | 大小 | 来源任务 |" >> release-info.md
+        echo "|---------|------|------|--------|" >> release-info.md
+        
+        mkdir -p temp-packages
+        find all-artifacts -name "*-packages.tar.gz" | while read pkg_file; do
+          task_name=$(basename "$pkg_file" | sed 's/-packages.tar.gz$//')
+          mkdir -p "temp-$task_name"
+          tar

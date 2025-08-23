@@ -209,9 +209,10 @@ jobs:
         done
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
         
-        # 收集所有.bin文件路径
-        BIN_FILES=$(find $PWD -maxdepth 1 -name "*.bin" -type f | tr '\n' ' ')
-        echo "BIN_FILES=$BIN_FILES" >> $GITHUB_ENV
+        # 收集所有.bin文件路径，每个路径单独一行
+        echo "BIN_FILES<<EOF" >> $GITHUB_ENV
+        find $PWD -maxdepth 1 -name "*.bin" -type f >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
     - name: Debug Release Variables(调试Release变量)
       if: steps.compile.outputs.status == 'success'
       run: |
@@ -220,7 +221,8 @@ jobs:
         echo "FIRMWARE_TAG: ${{ env.FIRMWARE_TAG }}"
         echo "FIRMWARE_PATH: ${{ env.FIRMWARE_PATH }}"
         echo "DATE: ${{ env.DATE }}"
-        echo "BIN_FILES: ${{ env.BIN_FILES }}"
+        echo "=== BIN_FILES 内容 ==="
+        echo "${{ env.BIN_FILES }}"
         echo "=== 检查固件文件 ==="
         ls -la "${{ env.FIRMWARE_PATH }}/"
         echo "=== 检查 .bin 文件 ==="

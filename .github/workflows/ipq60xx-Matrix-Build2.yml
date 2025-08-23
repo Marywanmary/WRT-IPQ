@@ -300,6 +300,9 @@ jobs:
     needs: Build
     runs-on: ubuntu-latest
     steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
     - name: Check Build Results
       id: check-builds
       run: |
@@ -310,8 +313,8 @@ jobs:
         run_id=${{ github.run_id }}
         echo "当前运行ID: $run_id"
         
-        # 使用gh API获取作业列表
-        jobs_json=$(gh run view "$run_id" --json jobs)
+        # 使用gh API获取作业列表，明确指定仓库
+        jobs_json=$(gh run view "$run_id" --repo "${{ github.repository }}" --json jobs)
         echo "获取到的作业JSON长度: $(echo "$jobs_json" | wc -c)"
         
         # 检查每个矩阵组合的构建状态
@@ -361,8 +364,8 @@ jobs:
           for config in Pro Max Ultra; do
             artifact_name="firmware-${repo}-${config}"
             
-            # 检查artifact是否存在
-            if gh run view "${{ github.run_id }}" --json artifacts --jq ".artifacts[] | select(.name == \"$artifact_name\")" | grep -q "name"; then
+            # 检查artifact是否存在，明确指定仓库
+            if gh run view "${{ github.run_id }}" --repo "${{ github.repository }}" --json artifacts --jq ".artifacts[] | select(.name == \"$artifact_name\")" | grep -q "name"; then
               echo "Artifact $artifact_name 存在"
             else
               echo "Artifact $artifact_name 不存在"
@@ -502,14 +505,15 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -e
-        # 创建Release并上传所有文件
+        # 创建Release并上传所有文件，明确指定仓库
         gh release create "${{ steps.tag.outputs.tag }}" \
+          --repo "${{ github.repository }}" \
           --title "ipq60xx Firmware $(date +'%Y-%m-%d')" \
           --notes-file release-info.md \
           release-files/*
         
         # 验证Release是否创建成功
-        if gh release view "${{ steps.tag.outputs.tag }}" >/dev/null 2>&1; then
+        if gh release view "${{ steps.tag.outputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
           echo "Release创建成功"
         else
           echo "错误: Release创建失败"
@@ -525,7 +529,8 @@ jobs:
         for repo in ImmWrt OpenWrt LibWrt; do
           for config in Pro Max Ultra; do
             job_name="Build ($repo, $config)"
-            job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq \
+            # 明确指定仓库
+            job_status=$(gh run view "${{ github.run_id }}" --repo "${{ github.repository }}" --json jobs --jq \
               --arg name "$job_name" \
               '.jobs[] | select(.name == $name) | .status')
             if [ "$job_status" != "success" ]; then

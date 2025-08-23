@@ -291,33 +291,41 @@ jobs:
         # 检查每个矩阵组合的构建状态
         for repo in ImmWrt OpenWrt LibWrt; do
           for config in Pro Max Ultra; do
-            job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq \
-              --arg name "Build ($repo, $config)" \
-              '.jobs[] | select(.name == $name) | .status')
-            echo "作业 Build ($repo, $config) 状态: $job_status"
+            job_name="Build ($repo, $config)"
             
-            [[ "$job_status" == "success" ]] || all_builds_success=false
+            # 使用更简单的方式获取作业状态
+            job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq ".jobs[] | select(.name == \"$job_name\") | .status")
+            
+            echo "作业 $job_name 状态: $job_status"
+            
+            if [[ "$job_status" != "success" ]]; then
+              all_builds_success=false
+              echo "检测到失败的构建作业: $job_name"
+            fi
           done
         done
         
         echo "all_builds_success=$all_builds_success" >> "$GITHUB_OUTPUT"
         
-        [[ "$all_builds_success" == "false" ]] && echo "失败的构建作业:" && \
-        for repo in ImmWrt OpenWrt LibWrt; do
-          for config in Pro Max Ultra; do
-            job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq \
-              --arg name "Build ($repo, $config)" \
-              '.jobs[] | select(.name == $name) | .status')
-            [[ "$job_status" != "success" ]] && echo "- Build ($repo, $config) (状态: $job_status)"
+        if [[ "$all_builds_success" == "false" ]]; then
+          echo "失败的构建作业:"
+          for repo in ImmWrt OpenWrt LibWrt; do
+            for config in Pro Max Ultra; do
+              job_name="Build ($repo, $config)"
+              job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq ".jobs[] | select(.name == \"$job_name\") | .status")
+              if [[ "$job_status" != "success" ]]; then
+                echo "- $job_name (状态: $job_status)"
+              fi
+            done
           done
-        done
+        fi
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Generate Release Tag
       id: tag
       if: steps.check-builds.outputs.all_builds_success == 'true'
-      run: echo "tag=ipq60xx-$(date +'%Y%m%d-%H%M%S')-$(echo "$RANDOM" | cut -c1-4)" >> "$GITHUB_OUTPUT
+      run: echo "tag=ipq60xx-$(date +'%Y%m%d-%H%M%S')-$(echo "$RANDOM" | cut -c1-4)" >> "$GITHUB_OUTPUT"
 
     - name: Prepare Release Files
       if: steps.check-builds.outputs.all_builds_success == 'true'
@@ -458,9 +466,7 @@ jobs:
         for repo in ImmWrt OpenWrt LibWrt; do
           for config in Pro Max Ultra; do
             job_name="Build ($repo, $config)"
-            job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq \
-              --arg name "$job_name" \
-              '.jobs[] | select(.name == $name) | .status')
+            job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq ".jobs[] | select(.name == \"$job_name\") | .status")
             if [ "$job_status" != "success" ]; then
               echo "- $job_name (状态: $job_status)"
             fi

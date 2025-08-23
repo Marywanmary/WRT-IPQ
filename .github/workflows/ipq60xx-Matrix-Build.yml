@@ -198,14 +198,18 @@ jobs:
         set -e
         cd $OPENWRT_PATH
         echo -e "$(nproc) thread compile"
-        if make -j$(nproc) || make -j1 || make -j1 V=s; then
-          echo "status=success" >> $GITHUB_OUTPUT
+        if make -j$(nproc); then
           echo "编译成功完成"
+        elif make -j1; then
+          echo "编译成功完成(使用-j1)"
+        elif make -j1 V=s; then
+          echo "编译成功完成(使用-j1 V=s)"
         else
-          echo "status=failed" >> $GITHUB_OUTPUT
           echo "编译失败"
+          echo "status=failed" >> $GITHUB_OUTPUT
           exit 1
         fi
+        echo "status=success" >> $GITHUB_OUTPUT
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
 
@@ -213,136 +217,148 @@ jobs:
       if: (!cancelled())
       run: df -hT
 
-- name: Organize Files(整理文件)
-  if: steps.compile.outputs.status == 'success'
-  env:
-    REPO_SHORT: ${{ matrix.repo.name }}
-    CONFIG_TYPE: ${{ env.CONFIG_TYPE }}
-  run: |
-    set -e
-    cd $OPENWRT_PATH/bin/targets/*/*
-    
-    # 确保无论如何都设置FIRMWARE_PATH
-    echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
-    
-    # 首先列出目录中的所有文件，以便调试
-    echo "目录中的所有文件:"
-    ls -la
-    
-    # 重命名配置和清单文件 - 查找所有可能的文件名
-    echo "处理配置和清单文件..."
-    
-    # 查找所有.config文件（可能包含FIRMWARE_TAG或其他名称）
-    config_files=$(find . -maxdepth 1 -name "*.config" -type f)
-    if [ -n "$config_files" ]; then
-      for config_file in $config_files; do
-        echo "找到配置文件: $config_file"
-        new_name="$REPO_SHORT-$CONFIG_TYPE.config"
-        echo "重命名 $config_file 为 $new_name"
-        mv "$config_file" "$new_name"
-      done
-    else
-      echo "警告: 未找到任何.config文件"
-    fi
-    
-    # 查找所有.config.buildinfo文件
-    buildinfo_files=$(find . -maxdepth 1 -name "*.config.buildinfo" -type f)
-    if [ -n "$buildinfo_files" ]; then
-      for buildinfo_file in $buildinfo_files; do
-        echo "找到构建信息文件: $buildinfo_file"
-        new_name="$REPO_SHORT-$CONFIG_TYPE.config.buildinfo"
-        echo "重命名 $buildinfo_file 为 $new_name"
-        mv "$buildinfo_file" "$new_name"
-      done
-    else
-      echo "警告: 未找到任何.config.buildinfo文件"
-    fi
-    
-    # 查找所有.manifest文件
-    manifest_files=$(find . -maxdepth 1 -name "*.manifest" -type f)
-    if [ -n "$manifest_files" ]; then
-      for manifest_file in $manifest_files; do
-        echo "找到清单文件: $manifest_file"
-        new_name="$REPO_SHORT-$CONFIG_TYPE.manifest"
-        echo "重命名 $manifest_file 为 $new_name"
-        mv "$manifest_file" "$new_name"
-      done
-    else
-      echo "警告: 未找到任何.manifest文件"
-    fi
-    
-    # 收集ipk/apk文件
-    mkdir -p packages-temp
-    mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages-temp/ 2>/dev/null || true
-    mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages-temp/ 2>/dev/null || true
-    
-    # --- 重命名所有.bin文件 ---
-    echo "重命名所有.bin文件"
-    for file in *.bin; do
-      if [ -f "$file" ]; then
-        original_name="$file"
-        echo "处理文件: $original_name"
+    - name: Organize Files(整理文件)
+      if: steps.compile.outputs.status == 'success'
+      env:
+        REPO_SHORT: ${{ matrix.repo.name }}
+        CONFIG_TYPE: ${{ env.CONFIG_TYPE }}
+      run: |
+        set -e
+        cd $OPENWRT_PATH/bin/targets/*/*
         
-        # 通用文件名解析函数
-        parse_filename() {
-          local filename="$1"
-          local name_without_suffix="${filename%.bin}"
-          
-          # 尝试提取设备型号和固件类型
-          # 模式1: 包含"-squashfs-"的文件名
-          if [[ "$name_without_suffix" == *"-squashfs-"* ]]; then
-            # 提取"-squashfs-"之前的部分作为设备型号
-            device_part="${name_without_suffix%%-squashfs-*}"
-            # 提取"-squashfs-"之后的部分作为固件类型
-            firmware_type="${name_without_suffix#*-squashfs-}"
-          else
-            # 模式2: 不包含"-squashfs-"的文件名
-            # 使用最后一个"-"分割
-            device_part="${name_without_suffix%-*}"
-            firmware_type="${name_without_suffix##*-}"
-          fi
-          
-          # 清理设备型号中的前缀（如libwrt-qualcommax-ipq60xx-）
-          # 移除常见前缀
-          device_part="${device_part#libwrt-qualcommax-ipq60xx-}"
-          device_part="${device_part#immortalwrt-qualcommax-ipq60xx-}"
-          device_part="${device_part#openwrt-qualcommax-ipq60xx-}"
-          
-          echo "$device_part|$firmware_type"
-        }
+        # 确保无论如何都设置FIRMWARE_PATH
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
         
-        # 解析文件名
-        parsed_result=$(parse_filename "$original_name")
-        device_part=$(echo "$parsed_result" | cut -d'|' -f1)
-        firmware_type=$(echo "$parsed_result" | cut -d'|' -f2)
+        # 首先列出目录中的所有文件，以便调试
+        echo "目录中的所有文件:"
+        ls -la
         
-        # 验证解析结果
-        if [ -z "$device_part" ] || [ -z "$firmware_type" ]; then
-          echo "警告: 无法从文件名 $original_name 中提取设备型号和固件类型，跳过重命名"
-          continue
+        # 重命名配置和清单文件 - 查找所有可能的文件名
+        echo "处理配置和清单文件..."
+        
+        # 查找所有.config文件（可能包含FIRMWARE_TAG或其他名称）
+        config_files=$(find . -maxdepth 1 -name "*.config" -type f)
+        if [ -n "$config_files" ]; then
+          for config_file in $config_files; do
+            echo "找到配置文件: $config_file"
+            new_name="$REPO_SHORT-$CONFIG_TYPE.config"
+            echo "重命名 $config_file 为 $new_name"
+            mv "$config_file" "$new_name"
+          done
+        else
+          echo "警告: 未找到任何.config文件"
         fi
         
-        # 构建新文件名，不再添加REPO_SHORT前缀，因为原始文件名已经包含了仓库信息
-        newname="${device_part}-${firmware_type}-${CONFIG_TYPE}.bin"
-        echo "重命名 $original_name 为 $newname"
-        mv "$original_name" "$newname"
-      else
-        echo "警告: 没有找到.bin文件"
-      fi
-    done
-    
-    # 打包ipk/apk文件
-    if [ -d "packages-temp" ] && [ "$(ls -A packages-temp)" ]; then
-      tar -zcf $REPO_SHORT-$CONFIG_TYPE-packages.tar.gz -C packages-temp .
-      rm -rf packages-temp
-    fi
-    
-    # 再次确认FIRMWARE_PATH已设置
-    echo "最终FIRMWARE_PATH: $PWD" >> $GITHUB_ENV
-    
-    # 显示最终目录内容
-    echo "最终目录内容:"
-    ls -la
+        # 查找所有.config.buildinfo文件
+        buildinfo_files=$(find . -maxdepth 1 -name "*.config.buildinfo" -type f)
+        if [ -n "$buildinfo_files" ]; then
+          for buildinfo_file in $buildinfo_files; do
+            echo "找到构建信息文件: $buildinfo_file"
+            new_name="$REPO_SHORT-$CONFIG_TYPE.config.buildinfo"
+            echo "重命名 $buildinfo_file 为 $new_name"
+            mv "$buildinfo_file" "$new_name"
+          done
+        else
+          echo "警告: 未找到任何.config.buildinfo文件"
+        fi
+        
+        # 查找所有.manifest文件
+        manifest_files=$(find . -maxdepth 1 -name "*.manifest" -type f)
+        if [ -n "$manifest_files" ]; then
+          for manifest_file in $manifest_files; do
+            echo "找到清单文件: $manifest_file"
+            new_name="$REPO_SHORT-$CONFIG_TYPE.manifest"
+            echo "重命名 $manifest_file 为 $new_name"
+            mv "$manifest_file" "$new_name"
+          done
+        else
+          echo "警告: 未找到任何.manifest文件"
+        fi
+        
+        # 收集ipk/apk文件
+        mkdir -p packages-temp
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages-temp/ 2>/dev/null || true
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages-temp/ 2>/dev/null || true
+        
+        # --- 重命名所有.bin文件 ---
+        echo "重命名所有.bin文件"
+        for file in *.bin; do
+          if [ -f "$file" ]; then
+            original_name="$file"
+            echo "处理文件: $original_name"
+            
+            # 通用文件名解析函数
+            parse_filename() {
+              local filename="$1"
+              local name_without_suffix="${filename%.bin}"
+              
+              # 尝试提取设备型号和固件类型
+              # 模式1: 包含"-squashfs-"的文件名
+              if [[ "$name_without_suffix" == *"-squashfs-"* ]]; then
+                # 提取"-squashfs-"之前的部分作为设备型号
+                device_part="${name_without_suffix%%-squashfs-*}"
+                # 提取"-squashfs-"之后的部分作为固件类型
+                firmware_type="${name_without_suffix#*-squashfs-}"
+              else
+                # 模式2: 不包含"-squashfs-"的文件名
+                # 使用最后一个"-"分割
+                device_part="${name_without_suffix%-*}"
+                firmware_type="${name_without_suffix##*-}"
+              fi
+              
+              # 清理设备型号中的前缀（如libwrt-qualcommax-ipq60xx-）
+              # 移除常见前缀
+              device_part="${device_part#libwrt-qualcommax-ipq60xx-}"
+              device_part="${device_part#immortalwrt-qualcommax-ipq60xx-}"
+              device_part="${device_part#openwrt-qualcommax-ipq60xx-}"
+              
+              echo "$device_part|$firmware_type"
+            }
+            
+            # 解析文件名
+            parsed_result=$(parse_filename "$original_name")
+            device_part=$(echo "$parsed_result" | cut -d'|' -f1)
+            firmware_type=$(echo "$parsed_result" | cut -d'|' -f2)
+            
+            # 验证解析结果
+            if [ -z "$device_part" ] || [ -z "$firmware_type" ]; then
+              echo "警告: 无法从文件名 $original_name 中提取设备型号和固件类型，跳过重命名"
+              continue
+            fi
+            
+            # 构建新文件名，不再添加REPO_SHORT前缀，因为原始文件名已经包含了仓库信息
+            newname="${device_part}-${firmware_type}-${CONFIG_TYPE}.bin"
+            echo "重命名 $original_name 为 $newname"
+            mv "$original_name" "$newname"
+          else
+            echo "警告: 没有找到.bin文件"
+          fi
+        done
+        
+        # 打包ipk/apk文件
+        if [ -d "packages-temp" ] && [ "$(ls -A packages-temp)" ]; then
+          tar -zcf $REPO_SHORT-$CONFIG_TYPE-packages.tar.gz -C packages-temp .
+          rm -rf packages-temp
+        fi
+        
+        # 再次确认FIRMWARE_PATH已设置
+        echo "最终FIRMWARE_PATH: $PWD" >> $GITHUB_ENV
+        
+        # 显示最终目录内容
+        echo "最终目录内容:"
+        ls -la
+
+    - name: Debug Before Upload
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        echo "编译状态: ${{ steps.compile.outputs.status }}"
+        echo "FIRMWARE_PATH: ${{ env.FIRMWARE_PATH }}"
+        echo "目录内容:"
+        ls -la ${{ env.FIRMWARE_PATH }}
+        echo "检查.bin文件:"
+        find ${{ env.FIRMWARE_PATH }} -name "*.bin" -type f
+        echo "检查.config文件:"
+        find ${{ env.FIRMWARE_PATH }} -name "*.config" -type f
 
     - name: Upload Firmware as Artifact
       if: steps.compile.outputs.status == 'success'
@@ -400,18 +416,27 @@ jobs:
     - name: Check Build Results
       id: check-builds
       run: |
-        # 检查所有构建作业的结果
         echo "检查构建结果..."
+        echo "当前运行ID: ${{ github.run_id }}"
         
-        # 获取所有构建作业的结果
-        # 由于GitHub Actions没有直接获取矩阵作业结果的方法，我们通过检查artifact来推断
-        # 如果某个作业成功，它会上传artifact；如果失败，则不会上传
+        # 获取运行状态
+        echo "运行状态:"
+        gh run view ${{ github.run_id }} --json status,conclusion --jq '. | {status: .status, conclusion: .conclusion}'
+        
+        # 获取作业列表
+        echo "作业列表:"
+        gh run view ${{ github.run_id }} --json jobs --jq '.jobs[] | {name: .name, status: .status, conclusion: .conclusion}'
         
         # 创建临时目录存储artifact列表
         mkdir -p artifacts-list
         
-        # 下载所有artifacts（仅检查是否存在）
-        gh run download ${{ github.run_id }} --dir artifacts-list --name "*" 2>/dev/null || true
+        # 尝试下载所有artifacts
+        echo "尝试下载artifacts..."
+        gh run download ${{ github.run_id }} --dir artifacts-list --name "*" 2>&1 || echo "下载artifacts时出错"
+        
+        # 检查artifacts
+        echo "artifacts目录内容:"
+        ls -la artifacts-list/ || echo "artifacts目录不存在或为空"
         
         # 检查预期的artifact数量（3个仓库 × 3个配置 = 9个）
         expected_artifacts=9
@@ -477,11 +502,13 @@ jobs:
         # 遍历所有artifact目录，处理.bin文件
         find all-artifacts -name "*.bin" | while read file; do
           filename=$(basename "$file")
-          # 从文件名提取信息: ImmWrt-re-cs-02-factory-Pro.bin
-          repo=$(echo "$filename" | cut -d'-' -f1)
-          device=$(echo "$filename" | cut -d'-' -f2-3 | tr '-' ' ')
+          # 从文件名提取信息: jdcloud_re-cs-02-factory-Ultra.bin
+          device=$(echo "$filename" | cut -d'-' -f1-3 | tr '-' ' ')
           type=$(echo "$filename" | cut -d'-' -f4)
           config=$(echo "$filename" | cut -d'-' -f5 | cut -d'.' -f1)
+          
+          # 从目录名获取仓库信息
+          repo=$(echo "$file" | awk -F'/' '{print $(NF-1)}' | cut -d'-' -f2)
           
           # 复制.bin文件到统一目录
           cp "$file" release-files/

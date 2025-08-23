@@ -147,8 +147,15 @@ jobs:
         # 编译固件
         echo "$(nproc) thread compile"
         if make -j"$(nproc)" || make -j1 || make -j1 V=s; then
-          echo "status=success" >> "$GITHUB_OUTPUT"
-          echo "编译成功完成"
+          # 检查是否生成了预期的二进制文件
+          if [ ! -d "$OPENWRT_PATH/bin/targets" ] || [ -z "$(find "$OPENWRT_PATH/bin/targets" -name "*.bin" | head -n 1)" ]; then
+            echo "警告: 构建完成但未找到二进制文件"
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          else
+            echo "status=success" >> "$GITHUB_OUTPUT"
+            echo "编译成功完成"
+          fi
         else
           echo "status=failed" >> "$GITHUB_OUTPUT"
           echo "编译失败"
@@ -157,63 +164,74 @@ jobs:
         echo "DATE=$(date +'%Y-%m-%d %H:%M:%S')" >> "$GITHUB_ENV"
         echo "FILE_DATE=$(date +'%Y.%m.%d')" >> "$GITHUB_ENV"
 
+    - name: Debug Build Output
+      if: steps.build.outputs.status == 'success'
+      run: |
+        echo "=== 调试信息: OpenWrt构建输出 ==="
+        echo "OPENWRT_PATH: $OPENWRT_PATH"
+        echo "bin目录内容:"
+        ls -la "$OPENWRT_PATH/bin/" || echo "bin目录不存在"
+        echo "targets目录内容:"
+        ls -la "$OPENWRT_PATH/bin/targets/" || echo "targets目录不存在"
+        
+        if [ -d "$OPENWRT_PATH/bin/targets" ]; then
+          echo "遍历targets子目录:"
+          find "$OPENWRT_PATH/bin/targets" -type d | while read dir; do
+            echo "目录: $dir"
+            if [ -d "$dir" ]; then
+              echo "内容:"
+              ls -la "$dir/" | head -20
+            fi
+          done
+        fi
+
     - name: Check Space Usage
       if: (!cancelled())
       run: df -hT
 
-    - name: Verify Build Output
-      id: verify-build
+    - name: Process Artifacts
       if: steps.build.outputs.status == 'success'
+      env:
+        REPO_SHORT: ${{ matrix.repo.name }}
+        CONFIG_TYPE: ${{ env.CONFIG_TYPE }}
       run: |
         set -e
         # 检查bin目录是否存在
-        if [[ ! -d "$OPENWRT_PATH/bin" ]]; then
-          echo "错误: 编译输出目录 $OPENWRT_PATH/bin 不存在"
-          echo "status=failed" >> "$GITHUB_OUTPUT"
+        if [ ! -d "$OPENWRT_PATH/bin" ]; then
+          echo "错误: bin目录不存在: $OPENWRT_PATH/bin"
+          echo "构建可能未成功完成或输出目录结构不同"
           exit 1
         fi
         
         # 查找targets目录
-        TARGETS_DIR=$(find "$OPENWRT_PATH/bin" -type d -name "targets" | head -1)
-        if [[ -z "$TARGETS_DIR" ]]; then
-          echo "错误: 在 $OPENWRT_PATH/bin 中未找到targets目录"
-          echo "status=failed" >> "$GITHUB_OUTPUT"
+        TARGETS_DIR="$OPENWRT_PATH/bin/targets"
+        if [ ! -d "$TARGETS_DIR" ]; then
+          echo "错误: targets目录不存在: $TARGETS_DIR"
+          echo "列出bin目录内容:"
+          ls -la "$OPENWRT_PATH/bin/"
           exit 1
         fi
         
-        # 查找具体的子目录
-        SUBDIR=$(find "$TARGETS_DIR" -mindepth 2 -maxdepth 2 -type d | head -1)
-        if [[ -z "$SUBDIR" ]]; then
-          echo "错误: 在 $TARGETS_DIR 中未找到子目录"
-          echo "status=failed" >> "$GITHUB_OUTPUT"
+        # 查找第一个匹配的子目录
+        TARGET_SUBDIR=$(find "$TARGETS_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+        if [ -z "$TARGET_SUBDIR" ]; then
+          echo "错误: 在targets目录中找不到子目录"
+          echo "列出targets目录内容:"
+          ls -la "$TARGETS_DIR/"
           exit 1
         fi
         
-        # 检查是否有.bin文件
-        BIN_COUNT=$(find "$SUBDIR" -name "*.bin" | wc -l)
-        if [[ "$BIN_COUNT" -eq 0 ]]; then
-          echo "错误: 在 $SUBDIR 中未找到.bin文件"
-          echo "status=failed" >> "$GITHUB_OUTPUT"
+        # 查找最终的固件目录
+        FIRMWARE_DIR=$(find "$TARGET_SUBDIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+        if [ -z "$FIRMWARE_DIR" ]; then
+          echo "错误: 在 $TARGET_SUBDIR 中找不到固件目录"
+          echo "列出目录内容:"
+          ls -la "$TARGET_SUBDIR/"
           exit 1
         fi
         
-        echo "找到 $BIN_COUNT 个.bin文件"
-        echo "FIRMWARE_DIR=$SUBDIR" >> "$GITHUB_ENV"
-        echo "status=success" >> "$GITHUB_OUTPUT"
-
-    - name: Process Artifacts
-      if: steps.verify-build.outputs.status == 'success'
-      env:
-        REPO_SHORT: ${{ matrix.repo.name }}
-        CONFIG_TYPE: ${{ env.CONFIG_TYPE }}
-        FIRMWARE_DIR: ${{ env.FIRMWARE_DIR }}
-      run: |
-        set -e
+        echo "找到固件目录: $FIRMWARE_DIR"
         cd "$FIRMWARE_DIR"
-        
-        # 列出目录内容以便调试
-        echo "目录内容:"
-        ls -la
         
         # 重命名配置和清单文件
         mv "$FIRMWARE_TAG.config" "$REPO_SHORT-$CONFIG_TYPE.config" || true
@@ -265,7 +283,7 @@ jobs:
         echo "FIRMWARE_PATH=$PWD" >> "$GITHUB_ENV"
 
     - name: Upload Artifacts
-      if: steps.verify-build.outputs.status == 'success'
+      if: steps.build.outputs.status == 'success'
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ matrix.repo.name }}-${{ matrix.config.name }}
@@ -282,28 +300,34 @@ jobs:
     needs: Build
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-
     - name: Check Build Results
       id: check-builds
       run: |
         echo "检查构建结果..."
         all_builds_success=true
         
+        # 获取当前运行的所有作业状态
+        run_id=${{ github.run_id }}
+        echo "当前运行ID: $run_id"
+        
+        # 使用gh API获取作业列表
+        jobs_json=$(gh run view "$run_id" --json jobs)
+        echo "获取到的作业JSON长度: $(echo "$jobs_json" | wc -c)"
+        
         # 检查每个矩阵组合的构建状态
         for repo in ImmWrt OpenWrt LibWrt; do
           for config in Pro Max Ultra; do
             job_name="Build ($repo, $config)"
             
-            # 使用更简单的方式获取作业状态
-            job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq ".jobs[] | select(.name == \"$job_name\") | .status")
+            # 使用jq从JSON中提取作业状态
+            job_status=$(echo "$jobs_json" | jq -r --arg name "$job_name" '.jobs[] | select(.name == $name) | .status')
             
-            echo "作业 $job_name 状态: $job_status"
+            echo "作业 $job_name 状态: '$job_status'"
             
+            # 如果状态为空或不是success，则标记为失败
             if [[ "$job_status" != "success" ]]; then
               all_builds_success=false
-              echo "检测到失败的构建作业: $job_name"
+              echo "检测到失败的构建作业: $job_name (状态: $job_status)"
             fi
           done
         done
@@ -315,7 +339,7 @@ jobs:
           for repo in ImmWrt OpenWrt LibWrt; do
             for config in Pro Max Ultra; do
               job_name="Build ($repo, $config)"
-              job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq ".jobs[] | select(.name == \"$job_name\") | .status")
+              job_status=$(echo "$jobs_json" | jq -r --arg name "$job_name" '.jobs[] | select(.name == $name) | .status')
               if [[ "$job_status" != "success" ]]; then
                 echo "- $job_name (状态: $job_status)"
               fi
@@ -325,27 +349,59 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Alternative Check via Artifacts
+      id: artifact-check
+      if: steps.check-builds.outputs.all_builds_success == 'false'
+      run: |
+        echo "通过检查artifact来验证构建结果..."
+        all_artifacts_exist=true
+        
+        # 检查每个矩阵组合的artifact是否存在
+        for repo in ImmWrt OpenWrt LibWrt; do
+          for config in Pro Max Ultra; do
+            artifact_name="firmware-${repo}-${config}"
+            
+            # 检查artifact是否存在
+            if gh run view "${{ github.run_id }}" --json artifacts --jq ".artifacts[] | select(.name == \"$artifact_name\")" | grep -q "name"; then
+              echo "Artifact $artifact_name 存在"
+            else
+              echo "Artifact $artifact_name 不存在"
+              all_artifacts_exist=false
+            fi
+          done
+        done
+        
+        if [[ "$all_artifacts_exist" == "true" ]]; then
+          echo "所有artifact都存在，构建成功"
+          echo "all_builds_success=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "部分artifact不存在，构建失败"
+          echo "all_builds_success=false" >> "$GITHUB_OUTPUT"
+        fi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Generate Release Tag
       id: tag
-      if: steps.check-builds.outputs.all_builds_success == 'true'
+      if: steps.check-builds.outputs.all_builds_success == 'true' || steps.artifact-check.outputs.all_builds_success == 'true'
       run: echo "tag=ipq60xx-$(date +'%Y%m%d-%H%M%S')-$(echo "$RANDOM" | cut -c1-4)" >> "$GITHUB_OUTPUT"
 
     - name: Prepare Release Files
-      if: steps.check-builds.outputs.all_builds_success == 'true'
+      if: steps.check-builds.outputs.all_builds_success == 'true' || steps.artifact-check.outputs.all_builds_success == 'true'
       run: |
         set -e
         mkdir -p release-files
         mkdir -p merged-packages
 
     - name: Download all artifacts
-      if: steps.check-builds.outputs.all_builds_success == 'true'
+      if: steps.check-builds.outputs.all_builds_success == 'true' || steps.artifact-check.outputs.all_builds_success == 'true'
       uses: actions/download-artifact@v4
       with:
         path: all-artifacts
         merge-multiple: false
 
     - name: Process Release Files
-      if: steps.check-builds.outputs.all_builds_success == 'true'
+      if: steps.check-builds.outputs.all_builds_success == 'true' || steps.artifact-check.outputs.all_builds_success == 'true'
       run: |
         set -e
         # 创建固件信息文件
@@ -441,7 +497,7 @@ jobs:
         rm -rf temp-packages
 
     - name: Create Release and Upload Files
-      if: steps.check-builds.outputs.all_builds_success == 'true'
+      if: steps.check-builds.outputs.all_builds_success == 'true' || steps.artifact-check.outputs.all_builds_success == 'true'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -461,7 +517,7 @@ jobs:
         fi
 
     - name: Notify Build Failures
-      if: steps.check-builds.outputs.all_builds_success == 'false'
+      if: steps.check-builds.outputs.all_builds_success == 'false' && steps.artifact-check.outputs.all_builds_success == 'false'
       run: |
         echo "部分构建作业失败，已跳过Release创建"
         echo "请查看构建日志以获取详细信息"
@@ -469,7 +525,9 @@ jobs:
         for repo in ImmWrt OpenWrt LibWrt; do
           for config in Pro Max Ultra; do
             job_name="Build ($repo, $config)"
-            job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq ".jobs[] | select(.name == \"$job_name\") | .status")
+            job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq \
+              --arg name "$job_name" \
+              '.jobs[] | select(.name == $name) | .status')
             if [ "$job_status" != "success" ]; then
               echo "- $job_name (状态: $job_status)"
             fi

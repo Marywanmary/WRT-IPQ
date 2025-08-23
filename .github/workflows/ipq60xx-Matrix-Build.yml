@@ -228,13 +228,16 @@ jobs:
       run: |
         set -e
         cd $OPENWRT_PATH/bin/targets/*/*
-        cp $OPENWRT_PATH/.config $FIRMWARE_TAG.config || true
-        mv config.buildinfo $FIRMWARE_TAG.config.buildinfo || true
-        mv immortalwrt-qualcommax-ipq60xx.manifest ipq60xx.manifest || true
-        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages || true
-        mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages || true
-        tar -zcf $FIRMWARE_TAG.Packages.tar.gz packages
-        rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
+        
+        # 重命名配置和清单文件
+        mv $FIRMWARE_TAG.config $REPO_SHORT-$CONFIG_TYPE.config || true
+        mv $FIRMWARE_TAG.config.buildinfo $REPO_SHORT-$CONFIG_TYPE.config.buildinfo || true
+        mv ipq60xx.manifest $REPO_SHORT-$CONFIG_TYPE.manifest || true
+        
+        # 收集ipk/apk文件
+        mkdir -p packages-temp
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages-temp/ 2>/dev/null || true
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages-temp/ 2>/dev/null || true
         
         # --- 重命名所有.bin文件 ---
         echo "重命名所有.bin文件"
@@ -271,15 +274,27 @@ jobs:
             echo "警告: 没有找到.bin文件"
           fi
         done
+        
+        # 打包ipk/apk文件
+        if [ -d "packages-temp" ] && [ "$(ls -A packages-temp)" ]; then
+          tar -zcf $REPO_SHORT-$CONFIG_TYPE-packages.tar.gz -C packages-temp .
+          rm -rf packages-temp
+        fi
+        
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
 
     - name: Upload Firmware as Artifact
       if: steps.compile.outputs.status == 'success'
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ matrix.repo.name }}-${{ matrix.config.name }}
-        path: ${{ env.FIRMWARE_PATH }}
-        retention-days: 14  # 延长保留时间
+        path: |
+          ${{ env.FIRMWARE_PATH }}/*.bin
+          ${{ env.FIRMWARE_PATH }}/*.config
+          ${{ env.FIRMWARE_PATH }}/*.config.buildinfo
+          ${{ env.FIRMWARE_PATH }}/*.manifest
+          ${{ env.FIRMWARE_PATH }}/*-packages.tar.gz
+        retention-days: 14
 
     - name: Delete Old Cache
       if: always()
@@ -316,14 +331,17 @@ jobs:
       run: echo "tag=ipq60xx-$(date '+%Y%m%d-%H%M%S')-$(echo $RANDOM | cut -c1-4)" >> $GITHUB_OUTPUT
 
     - name: Download all artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         path: all-artifacts
+        merge-multiple: false
 
     - name: Prepare release files
       run: |
         set -e
         mkdir -p release-files
+        mkdir -p merged-packages
+        
         # 创建固件信息文件
         echo "## ipq60xx 固件发布" > release-info.md
         echo "" >> release-info.md
@@ -334,7 +352,7 @@ jobs:
         echo "| 仓库 | 配置 | 设备 | 类型 | 文件名 |" >> release-info.md
         echo "|------|------|------|------|--------|" >> release-info.md
         
-        # 遍历所有artifact目录，复制.bin文件并记录信息
+        # 遍历所有artifact目录，处理.bin文件
         find all-artifacts -name "*.bin" | while read file; do
           filename=$(basename "$file")
           # 从文件名提取信息: ImmWrt-re-cs-02-factory-Pro.bin
@@ -343,12 +361,80 @@ jobs:
           type=$(echo "$filename" | cut -d'-' -f4)
           config=$(echo "$filename" | cut -d'-' -f5 | cut -d'.' -f1)
           
-          # 复制文件到统一目录
+          # 复制.bin文件到统一目录
           cp "$file" release-files/
           
           # 记录信息
           echo "| $repo | $config | $device | $type | $filename |" >> release-info.md
         done
+        
+        # 收集所有config、config.buildinfo、manifest文件
+        find all-artifacts -name "*.config" ! -name "*packages*" -exec cp {} release-files/ \;
+        find all-artifacts -name "*.config.buildinfo" -exec cp {} release-files/ \;
+        find all-artifacts -name "*.manifest" -exec cp {} release-files/ \;
+        
+        # 合并所有packages文件（剔除重复项）
+        echo "### 软件包信息" >> release-info.md
+        echo "" >> release-info.md
+        echo "本Release包含以下软件包（已剔除重复项）：" >> release-info.md
+        echo "" >> release-info.md
+        echo "| 软件包名 | 版本 | 大小 | 来源任务 |" >> release-info.md
+        echo "|---------|------|------|--------|" >> release-info.md
+        
+        # 创建临时目录用于合并软件包
+        mkdir -p temp-packages
+        
+        # 处理所有packages文件
+        find all-artifacts -name "*-packages.tar.gz" | while read pkg_file; do
+          # 提取任务名称
+          task_name=$(basename "$pkg_file" | sed 's/-packages.tar.gz$//')
+          
+          # 解压到临时目录
+          mkdir -p "temp-$task_name"
+          tar -zxf "$pkg_file" -C "temp-$task_name"
+          
+          # 处理每个软件包
+          find "temp-$task_name" -type f | while read pkg; do
+            pkg_name=$(basename "$pkg")
+            pkg_size=$(du -h "$pkg" | cut -f1)
+            
+            # 检查是否已存在同名软件包
+            if [ -f "temp-packages/$pkg_name" ]; then
+              echo "跳过重复软件包: $pkg_name (来自 $task_name)"
+            else
+              # 复制软件包到合并目录
+              cp "$pkg" "temp-packages/"
+              
+              # 提取版本信息（如果可能）
+              if [[ "$pkg_name" == *.ipk ]]; then
+                version=$(tar -tzf "$pkg" control/control 2>/dev/null | grep "^Version:" | cut -d' ' -f2 2>/dev/null || echo "N/A")
+              elif [[ "$pkg_name" == *.apk ]]; then
+                version=$(aapt dump badging "$pkg" 2>/dev/null | grep "package: name=" | cut -d"'" -f4 2>/dev/null || echo "N/A")
+              else
+                version="N/A"
+              fi
+              
+              # 记录软件包信息
+              echo "| $pkg_name | $version | $pkg_size | $task_name |" >> release-info.md
+            fi
+          done
+          
+          # 清理临时目录
+          rm -rf "temp-$task_name"
+        done
+        
+        # 打包合并后的软件包
+        if [ -d "temp-packages" ] && [ "$(ls -A temp-packages)" ]; then
+          tar -zcf release-files/packages.tar.gz -C temp-packages .
+          echo "" >> release-info.md
+          echo "**注意**: 所有软件包已合并到 `packages.tar.gz` 文件中。" >> release-info.md
+        else
+          echo "" >> release-info.md
+          echo "**注意**: 未找到任何软件包。" >> release-info.md
+        fi
+        
+        # 清理临时目录
+        rm -rf temp-packages
 
     - name: Create Release and Upload Files
       env:
@@ -359,7 +445,7 @@ jobs:
         gh release create "${{ steps.tag.outputs.tag }}" \
           --title "ipq60xx Firmware $(date '+%Y-%m-%d')" \
           --notes-file release-info.md \
-          release-files/*.bin
+          release-files/*
         
         # 验证Release是否创建成功
         if gh release view "${{ steps.tag.outputs.tag }}" >/dev/null 2>&1; then

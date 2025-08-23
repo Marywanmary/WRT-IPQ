@@ -226,7 +226,7 @@ jobs:
         set -e
         cd $OPENWRT_PATH/bin/targets/*/*
         
-        # 确保无论如何都设置FIRMWARE_PATH
+        # 确保无论如何都设置FIRMWARE_PATH（修复格式错误）
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
         
         # 首先列出目录中的所有文件，以便调试
@@ -249,8 +249,8 @@ jobs:
           echo "警告: 未找到任何.config文件"
         fi
         
-        # 查找所有.config.buildinfo文件
-        buildinfo_files=$(find . -maxdepth 1 -name "*.config.buildinfo" -type f)
+        # 查找所有.config.buildinfo文件（修复查找逻辑）
+        buildinfo_files=$(find . -maxdepth 1 -name "*.buildinfo" -type f | grep -v "feeds.buildinfo" | grep -v "version.buildinfo")
         if [ -n "$buildinfo_files" ]; then
           for buildinfo_file in $buildinfo_files; do
             echo "找到构建信息文件: $buildinfo_file"
@@ -340,9 +340,6 @@ jobs:
           tar -zcf $REPO_SHORT-$CONFIG_TYPE-packages.tar.gz -C packages-temp .
           rm -rf packages-temp
         fi
-        
-        # 再次确认FIRMWARE_PATH已设置
-        echo "最终FIRMWARE_PATH: $PWD" >> $GITHUB_ENV
         
         # 显示最终目录内容
         echo "最终目录内容:"

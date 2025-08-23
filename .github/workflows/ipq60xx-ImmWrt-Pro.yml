@@ -4,11 +4,9 @@ on:
   workflow_call:
   schedule:
     - cron: 0 16 * * 4
-
 permissions:
   contents: write
   packages: write
-
 env:
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
   REPO_BRANCH: master
@@ -29,7 +27,6 @@ env:
   FIRMWARE_RELEASE: true
   FIRMWARE_TAG: ipq60xx
   TZ: Asia/Shanghai
-
 jobs:
   Build:
     runs-on: ubuntu-22.04
@@ -47,7 +44,6 @@ jobs:
         echo -e "$(sudo lshw -short -C memory | grep GiB) \n"
         echo "--------------------------硬盘信息--------------------------"
         echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
-
     - name: Initialization Environment(初始化环境)
       env:
         DEBIAN_FRONTEND: noninteractive
@@ -58,10 +54,8 @@ jobs:
         sudo -E apt-get -y autoremove --purge
         sudo -E apt-get -y clean
         sudo timedatectl set-timezone "$TZ"
-
     - name: Checkout(检出代码)
       uses: actions/checkout@main
-
     - name: Clone Source Code(克隆源代码)
       run: |
         df -hT $GITHUB_WORKSPACE
@@ -74,7 +68,6 @@ jobs:
         echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
         VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12)
         echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
-
     - name: Generate Variables(生成变量)
       run: |
         cp $CONFIG_FILE $OPENWRT_PATH/.config
@@ -88,7 +81,6 @@ jobs:
         echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
         echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-
     - name: Cache Toolchain(缓存工具链)
       uses: actions/cache@main
       with:
@@ -97,7 +89,6 @@ jobs:
         path: |
           ${{ env.OPENWRT_PATH }}/.ccache
           ${{ env.OPENWRT_PATH }}/staging_dir
-
     - name: Refresh The Cache(刷新缓存)
       run: |
         if [ -d "$OPENWRT_PATH/staging_dir" ]; then
@@ -105,13 +96,11 @@ jobs:
               find "$dir" -type f -exec touch {} +
           done
         fi
-
     - name: Install Feeds(安装feeds)
       run: |
         cd $OPENWRT_PATH
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-
     - name: Load Custom Configuration(加载自定义配置)
       run: |
         cat $CONFIG_FILE > $OPENWRT_PATH/.config
@@ -119,7 +108,6 @@ jobs:
         cd $OPENWRT_PATH
         # 运行自定义脚本
         $GITHUB_WORKSPACE/$DIY_SCRIPT
-
     - name: Download DL Package(下载DL软件包)
       run: |
         cd $OPENWRT_PATH
@@ -127,7 +115,6 @@ jobs:
         make download -j$(nproc)
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
-
     - name: Compile Firmware(开始编译固件)
       id: compile
       run: |
@@ -143,63 +130,60 @@ jobs:
         fi
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
-
     - name: Check Space Usage(检查空间使用情况)
       if: (!cancelled())
       run: df -hT
-
     - name: Organize Files(整理文件)
-    if: steps.compile.outputs.status == 'success'
+      if: steps.compile.outputs.status == 'success'
       run: |
-      cd $OPENWRT_PATH/bin/targets/*/*
-      cp $OPENWRT_PATH/.config $FIRMWARE_TAG.config || true
-      mv config.buildinfo $FIRMWARE_TAG.config.buildinfo || true
-      mv immortalwrt-qualcommax-ipq60xx.manifest ipq60xx.manifest || true
-      mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages || true
-      mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages || true
-      tar -zcf $FIRMWARE_TAG.Packages.tar.gz packages
-      rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
-    
-      # 从 CONFIG_FILE 变量提取配置类型 (Pro/Max/Ultra)
-      CONFIG_TYPE=$(basename "$CONFIG_FILE" .config)
-      echo "CONFIG_TYPE=$CONFIG_TYPE"
-    
-      # --- 重命名所有.bin文件 ---
-      echo "重命名所有.bin文件"
-      for file in *.bin; do
-        if [ -f "$file" ]; then
-          original_name="$file"
-          echo "处理文件: $original_name"
+        cd $OPENWRT_PATH/bin/targets/*/*
+        cp $OPENWRT_PATH/.config $FIRMWARE_TAG.config || true
+        mv config.buildinfo $FIRMWARE_TAG.config.buildinfo || true
+        mv immortalwrt-qualcommax-ipq60xx.manifest ipq60xx.manifest || true
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages || true
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages || true
+        tar -zcf $FIRMWARE_TAG.Packages.tar.gz packages
+        rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
         
-        # 提取设备型号和固件类型
-        if [[ "$original_name" == *"jdcloud_re-"* ]]; then
-          # 提取设备型号 (如 re-cs-02)
-          device_part=$(echo "$original_name" | sed -E 's/.*jdcloud_re-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/')
-          # 提取固件类型 (如 factory/sysupgrade)
-          firmware_type=$(echo "$original_name" | sed -E 's/.*jdcloud_re-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/')
-          newname="${REPO_SHORT}-${device_part}-${firmware_type}-${FIRMWARE_TAG}-${CONFIG_TYPE}.bin"
-        elif [[ "$original_name" == *"jdcloud-"* ]]; then
-          # 提取设备型号 (如 re-ss-01)
-          device_part=$(echo "$original_name" | sed -E 's/.*jdcloud-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/')
-          # 提取固件类型 (如 factory/sysupgrade)
-          firmware_type=$(echo "$original_name" | sed -E 's/.*jdcloud-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/')
-          newname="${REPO_SHORT}-${device_part}-${firmware_type}-${FIRMWARE_TAG}-${CONFIG_TYPE}.bin"
-        else
-          # 默认情况处理
-          # 提取设备型号 (如 re-cs-02)
-          device_part=$(echo "$original_name" | sed -E 's/.*immortalwrt-qualcommax-ipq60xx-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/')
-          # 提取固件类型 (如 factory/sysupgrade)
-          firmware_type=$(echo "$original_name" | sed -E 's/.*immortalwrt-qualcommax-ipq60xx-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/')
-          newname="${REPO_SHORT}-${device_part}-${firmware_type}-${FIRMWARE_TAG}-${CONFIG_TYPE}.bin"
-        fi
+        # 从 CONFIG_FILE 变量提取配置类型 (Pro/Max/Ultra)
+        CONFIG_TYPE=$(basename "$CONFIG_FILE" .config)
+        echo "CONFIG_TYPE=$CONFIG_TYPE"
         
-        echo "重命名 $original_name 为 $newname"
-        mv "$original_name" "$newname"
-      fi
-      done
-      echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
-
-      - name: Debug Release Variables(调试Release变量)
+        # --- 重命名所有.bin文件 ---
+        echo "重命名所有.bin文件"
+        for file in *.bin; do
+          if [ -f "$file" ]; then
+            original_name="$file"
+            echo "处理文件: $original_name"
+            
+            # 提取设备型号和固件类型
+            if [[ "$original_name" == *"jdcloud_re-"* ]]; then
+              # 提取设备型号 (如 re-cs-02)
+              device_part=$(echo "$original_name" | sed -E 's/.*jdcloud_re-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/')
+              # 提取固件类型 (如 factory/sysupgrade)
+              firmware_type=$(echo "$original_name" | sed -E 's/.*jdcloud_re-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/')
+              newname="${REPO_SHORT}-${device_part}-${firmware_type}-${FIRMWARE_TAG}-${CONFIG_TYPE}.bin"
+            elif [[ "$original_name" == *"jdcloud-"* ]]; then
+              # 提取设备型号 (如 re-ss-01)
+              device_part=$(echo "$original_name" | sed -E 's/.*jdcloud-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/')
+              # 提取固件类型 (如 factory/sysupgrade)
+              firmware_type=$(echo "$original_name" | sed -E 's/.*jdcloud-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/')
+              newname="${REPO_SHORT}-${device_part}-${firmware_type}-${FIRMWARE_TAG}-${CONFIG_TYPE}.bin"
+            else
+              # 默认情况处理
+              # 提取设备型号 (如 re-cs-02)
+              device_part=$(echo "$original_name" | sed -E 's/.*immortalwrt-qualcommax-ipq60xx-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/')
+              # 提取固件类型 (如 factory/sysupgrade)
+              firmware_type=$(echo "$original_name" | sed -E 's/.*immortalwrt-qualcommax-ipq60xx-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/')
+              newname="${REPO_SHORT}-${device_part}-${firmware_type}-${FIRMWARE_TAG}-${CONFIG_TYPE}.bin"
+            fi
+            
+            echo "重命名 $original_name 为 $newname"
+            mv "$original_name" "$newname"
+          fi
+        done
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+    - name: Debug Release Variables(调试Release变量)
       if: steps.compile.outputs.status == 'success'
       run: |
         echo "=== 调试信息 ==="
@@ -213,8 +197,7 @@ jobs:
         ls -la "${{ env.FIRMWARE_PATH }}/*.bin"
         echo "=== 检查标签是否存在 ==="
         git tag -l "${{ env.FIRMWARE_TAG }}"
-
-      - name: Upload Firmware To Release(发布固件)
+    - name: Upload Firmware To Release(发布固件)
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
       uses: softprops/action-gh-release@v1
       with:
@@ -240,15 +223,13 @@ jobs:
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Firmware To Artifact(将固件上传到Artifact)
+    - name: Upload Firmware To Artifact(将固件上传到Artifact)
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
       uses: actions/upload-artifact@main
       with:
         name: ${{ env.SOURCE_REPO }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE_PATH }}
-
-      - name: Delete Old Cache(删除旧缓存)
+    - name: Delete Old Cache(删除旧缓存)
       run: |
         # 获取缓存列表并删除
         gh cache list --key ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key --jq '.[] | .key' | while read -r key; do

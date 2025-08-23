@@ -1,0 +1,173 @@
+name: ipq60xx-Matrix-Build
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: 0 16 * * 4  # 每周四16点触发
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  Build:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        repo:
+          - name: ImmWrt
+            url: https://github.com/laipeng668/immortalwrt.git
+            branch: master
+          - name: OpenWrt
+            url: https://github.com/laipeng668/openwrt.git
+            branch: master
+          - name: LibWrt
+            url: https://github.com/laipeng668/immortalwrt.git
+            branch: master
+        config:
+          - name: Pro
+            file: configs/ipq60xx_Pro.config
+          - name: Max
+            file: configs/ipq60xx_Max.config
+          - name: Ultra
+            file: configs/ipq60xx_Ultra.config
+      max-parallel: 3  # 限制并发数量
+    
+    steps:
+    # ... [前面的步骤保持不变，直到Organize Files步骤] ...
+
+    - name: Organize Files(整理文件)
+      if: steps.compile.outputs.status == 'success'
+      env:
+        REPO_SHORT: ${{ matrix.repo.name }}
+        CONFIG_TYPE: ${{ matrix.config.name }}
+        FIRMWARE_TAG: ipq60xx
+      run: |
+        cd $OPENWRT_PATH/bin/targets/*/*
+        cp $OPENWRT_PATH/.config $FIRMWARE_TAG.config || true
+        mv config.buildinfo $FIRMWARE_TAG.config.buildinfo || true
+        mv immortalwrt-qualcommax-ipq60xx.manifest ipq60xx.manifest || true
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages || true
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages || true
+        tar -zcf $FIRMWARE_TAG.Packages.tar.gz packages
+        rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
+        
+        # --- 重命名所有.bin文件 ---
+        echo "重命名所有.bin文件"
+        for file in *.bin; do
+          if [ -f "$file" ]; then
+            original_name="$file"
+            echo "处理文件: $original_name"
+            
+            # 提取设备型号和固件类型
+            if [[ "$original_name" == *"jdcloud_re-"* ]]; then
+              # 提取设备型号 (如 re-cs-02)
+              device_part=$(echo "$original_name" | sed -E 's/.*jdcloud_re-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/')
+              # 提取固件类型 (如 factory/sysupgrade)
+              firmware_type=$(echo "$original_name" | sed -E 's/.*jdcloud_re-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/')
+              newname="${REPO_SHORT}-${device_part}-${firmware_type}-${CONFIG_TYPE}.bin"
+            elif [[ "$original_name" == *"jdcloud-"* ]]; then
+              # 提取设备型号 (如 re-ss-01)
+              device_part=$(echo "$original_name" | sed -E 's/.*jdcloud-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/')
+              # 提取固件类型 (如 factory/sysupgrade)
+              firmware_type=$(echo "$original_name" | sed -E 's/.*jdcloud-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/')
+              newname="${REPO_SHORT}-${device_part}-${firmware_type}-${CONFIG_TYPE}.bin"
+            else
+              # 默认情况处理
+              # 提取设备型号 (如 re-cs-02)
+              device_part=$(echo "$original_name" | sed -E 's/.*immortalwrt-qualcommax-ipq60xx-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/')
+              # 提取固件类型 (如 factory/sysupgrade)
+              firmware_type=$(echo "$original_name" | sed -E 's/.*immortalwrt-qualcommax-ipq60xx-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/')
+              newname="${REPO_SHORT}-${device_part}-${firmware_type}-${CONFIG_TYPE}.bin"
+            fi
+            
+            echo "重命名 $original_name 为 $newname"
+            mv "$original_name" "$newname"
+          fi
+        done
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+
+    - name: Upload Firmware as Artifact
+      if: steps.compile.outputs.status == 'success'
+      uses: actions/upload-artifact@v3
+      with:
+        name: firmware-${{ matrix.repo.name }}-${{ matrix.config.name }}
+        path: ${{ env.FIRMWARE_PATH }}
+        retention-days: 1
+
+  # 新增作业：创建Release并上传所有固件
+  Create-Release:
+    needs: Build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Generate release tag
+      id: tag
+      run: echo "tag=ipq60xx-$(date '+%Y%m%d')" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.tag.outputs.tag }}
+        release_name: ipq60xx Firmware $(date '+%Y-%m-%d')
+        body: |
+          ## ipq60xx 固件发布
+          
+          **发布日期**: $(date '+%Y-%m-%d %H:%M:%S')
+          
+          ### 固件列表
+          
+          | 仓库 | 配置 | 设备 | 类型 | 文件名 |
+          |------|------|------|------|--------|
+        draft: false
+        prerelease: false
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: all-artifacts
+
+    - name: Upload firmware files
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # 创建固件信息文件
+        echo "| 仓库 | 配置 | 设备 | 类型 | 文件名 |" >> firmware-info.md
+        echo "|------|------|------|------|--------|" >> firmware-info.md
+        
+        # 遍历所有artifact目录，上传.bin文件并记录信息
+        find all-artifacts -name "*.bin" | while read file; do
+          filename=$(basename "$file")
+          # 从文件名提取信息: ImmWrt-re-cs-02-factory-Pro.bin
+          repo=$(echo "$filename" | cut -d'-' -f1)
+          device=$(echo "$filename" | cut -d'-' -f2-3 | tr '-' ' ')
+          type=$(echo "$filename" | cut -d'-' -f4)
+          config=$(echo "$filename" | cut -d'-' -f5 | cut -d'.' -f1)
+          
+          # 上传文件到Release
+          gh release upload ${{ steps.tag.outputs.tag }} "$file" --clobber
+          
+          # 记录信息
+          echo "| $repo | $config | $device | $type | $filename |" >> firmware-info.md
+        done
+        
+        # 更新Release描述
+        gh release edit ${{ steps.tag.outputs.tag }} --body-file firmware-info.md
+
+    - name: Delete Old Cache
+      if: always()
+      run: |
+        # 获取缓存列表并删除
+        gh cache list --key immortalwrt-master-qualcommax-ipq60xx- --json key --jq '.[] | .key' | while read -r key; do
+          gh cache delete "$key"
+        done
+        gh cache list --key openwrt-master-qualcommax-ipq60xx- --json key --jq '.[] | .key' | while read -r key; do
+          gh cache delete "$key"
+        done
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -16,6 +16,7 @@ jobs:
   Build:
     runs-on: ubuntu-22.04
     strategy:
+      fail-fast: false  # 一个作业失败不影响其他作业
       matrix:
         repo:
           - name: ImmWrt
@@ -34,7 +35,7 @@ jobs:
             file: configs/ipq60xx_Max.config
           - name: Ultra
             file: configs/ipq60xx_Ultra.config
-      max-parallel: 9
+      max-parallel: 9  # 充分利用GitHub Actions并发能力
     
     steps:
     - name: Check Dependencies
@@ -51,11 +52,6 @@ jobs:
       run: |
         sudo -E apt-get -y update
         sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
-        # 安装GitHub CLI
-        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-        sudo -E apt-get -y update
-        sudo -E apt-get -y install gh
         sudo -E systemctl daemon-reload
         sudo -E apt-get -y autoremove --purge
         sudo -E apt-get -y clean
@@ -318,12 +314,6 @@ jobs:
         # 为当前仓库清理缓存
         echo "清理缓存: ${{ matrix.repo.name }}"
         
-        # 检查GitHub CLI权限
-        if ! gh auth status &>/dev/null; then
-          echo "警告: GitHub CLI未正确认证，跳过缓存清理"
-          exit 0
-        fi
-        
         # 使用简化的缓存键前缀
         REPO_NAME="${{ matrix.repo.name }}"
         CONFIG_NAME="${{ matrix.config.name }}"
@@ -353,22 +343,73 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       continue-on-error: true  # 即使这一步失败，也继续执行
 
-  # 新增作业：创建Release并上传所有固件
+  # 新增作业：检查编译结果并创建Release
   Create-Release:
     needs: Build
     runs-on: ubuntu-latest
     steps:
+    - name: Check Build Results
+      id: check-builds
+      run: |
+        # 检查所有构建作业的结果
+        echo "检查构建结果..."
+        
+        # 获取所有构建作业的结果
+        # 由于GitHub Actions没有直接获取矩阵作业结果的方法，我们通过检查artifact来推断
+        # 如果某个作业成功，它会上传artifact；如果失败，则不会上传
+        
+        # 创建临时目录存储artifact列表
+        mkdir -p artifacts-list
+        
+        # 下载所有artifacts（仅检查是否存在）
+        gh run download ${{ github.run_id }} --dir artifacts-list --name "*" 2>/dev/null || true
+        
+        # 检查预期的artifact数量（3个仓库 × 3个配置 = 9个）
+        expected_artifacts=9
+        actual_artifacts=$(ls artifacts-list/ 2>/dev/null | wc -l)
+        
+        echo "预期artifact数量: $expected_artifacts"
+        echo "实际artifact数量: $actual_artifacts"
+        
+        # 如果实际artifact数量等于预期数量，说明所有构建都成功
+        if [ "$actual_artifacts" -eq "$expected_artifacts" ]; then
+          echo "所有构建作业成功"
+          echo "all_builds_success=true" >> $GITHUB_OUTPUT
+        else
+          echo "部分构建作业失败"
+          echo "all_builds_success=false" >> $GITHUB_OUTPUT
+          
+          # 列出失败的构建作业
+          echo "失败的构建作业:"
+          for repo in ImmWrt OpenWrt LibWrt; do
+            for config in Pro Max Ultra; do
+              artifact_name="firmware-$repo-$config"
+              if [ ! -d "artifacts-list/$artifact_name" ]; then
+                echo "- $repo-$config"
+              fi
+            done
+          done
+        fi
+        
+        # 清理临时目录
+        rm -rf artifacts-list
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Generate release tag
       id: tag
+      if: steps.check-builds.outputs.all_builds_success == 'true'
       run: echo "tag=ipq60xx-$(date '+%Y%m%d-%H%M%S')-$(echo $RANDOM | cut -c1-4)" >> $GITHUB_OUTPUT
 
     - name: Download all artifacts
+      if: steps.check-builds.outputs.all_builds_success == 'true'
       uses: actions/download-artifact@v4
       with:
         path: all-artifacts
         merge-multiple: false
 
     - name: Prepare release files
+      if: steps.check-builds.outputs.all_builds_success == 'true'
       run: |
         set -e
         mkdir -p release-files
@@ -469,6 +510,7 @@ jobs:
         rm -rf temp-packages
 
     - name: Create Release and Upload Files
+      if: steps.check-builds.outputs.all_builds_success == 'true'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -486,3 +528,18 @@ jobs:
           echo "错误: Release创建失败"
           exit 1
         fi
+
+    - name: Notify Build Failures
+      if: steps.check-builds.outputs.all_builds_success == 'false'
+      run: |
+        echo "部分构建作业失败，已跳过Release创建"
+        echo "请查看构建日志以获取详细信息"
+        echo "失败的构建作业:"
+        for repo in ImmWrt OpenWrt LibWrt; do
+          for config in Pro Max Ultra; do
+            artifact_name="firmware-$repo-$config"
+            if [ ! -d "artifacts-list/$artifact_name" ]; then
+              echo "- $repo-$config"
+            fi
+          done
+        done

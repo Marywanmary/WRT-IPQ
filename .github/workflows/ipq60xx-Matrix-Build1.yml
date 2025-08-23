@@ -220,7 +220,7 @@ jobs:
         CONFIG_TYPE: ${{ env.CONFIG_TYPE }}
       run: |
         set -e
-        cd "$OPENWRT_PATH/bin/targets/*/*
+        cd "$OPENWRT_PATH/bin/targets/*/*"
         
         # 重命名配置和清单文件
         mv "$FIRMWARE_TAG.config" "$REPO_SHORT-$CONFIG_TYPE.config" || true

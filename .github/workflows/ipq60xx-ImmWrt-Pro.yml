@@ -6,6 +6,8 @@ on:
     - cron: 0 16 * * 4
 permissions:
   contents: write
+  packages: write
+  actions: write  # 添加此权限以允许删除缓存
 env:
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
   REPO_BRANCH: master
@@ -218,14 +220,35 @@ jobs:
         name: ${{ env.SOURCE_REPO }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE_PATH }}
     - name: Delete Old Cache(删除旧缓存)
-      run: |
-        # 获取缓存列表并删除
-        gh cache list --key ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key --jq '.[] | .key' | while read -r key; do
-          gh cache delete "$key"
-        done
-        # 输出缓存状态
-        echo "========cache status========"
-        echo "ccache: $(du -sh $OPENWRT_PATH/.ccache | cut -f 1)"
-        echo "staging: $(du -sh $OPENWRT_PATH/staging_dir | cut -f 1)"
+      if: always()  # 确保此步骤始终运行，即使前面的步骤失败
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # 设置错误处理
+        set +e
+        # 获取缓存列表并删除
+        echo "尝试删除旧缓存..."
+        gh cache list --key ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key --jq '.[] | .key' | while read -r key; do
+          echo "删除缓存: $key"
+          gh cache delete "$key"
+        done
+        
+        # 检查删除是否成功
+        if [ $? -eq 0 ]; then
+          echo "缓存删除成功"
+        else
+          echo "警告: 缓存删除失败，但工作流将继续"
+        fi
+        
+        # 输出缓存状态
+        echo "========cache status========"
+        if [ -d "$OPENWRT_PATH/.ccache" ]; then
+          echo "ccache: $(du -sh $OPENWRT_PATH/.ccache | cut -f 1)"
+        else
+          echo "ccache: 不存在"
+        fi
+        if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+          echo "staging: $(du -sh $OPENWRT_PATH/staging_dir | cut -f 1)"
+        else
+          echo "staging: 不存在"
+        fi

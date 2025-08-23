@@ -6,21 +6,11 @@ on:
     - cron: 0 16 * * 4
 permissions:
   contents: write
-  packages: write
 env:
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
   REPO_BRANCH: master
   REPO_SHORT: ImmWrt
-  #REPO_URL: https://github.com/laipeng668/openwrt.git
-  #REPO_BRANCH: master
-  #REPO_SHORT: OpenWrt
-  #REPO_URL: https://github.com/laipeng668/immortalwrt.git
-  #REPO_BRANCH: master
-  #REPO_SHORT: LibWrt
   CONFIG_FILE: configs/ipq60xx_Pro.config
-  #CONFIG_FILE: configs/ipq60xx_Max.config
-  #CONFIG_FILE: configs/ipq60xx_Ultra.config
-  #GENERAL_CONFIG_FILE: configs/General.config
   DIY_SCRIPT: scripts/Script.sh
   CLASH_KERNEL: amd64
   UPLOAD_BIN_DIR: false
@@ -158,22 +148,15 @@ jobs:
             
             # 提取设备型号和固件类型
             if [[ "$original_name" == *"jdcloud_re-"* ]]; then
-              # 提取设备型号 (如 re-cs-02)
               device_part=$(echo "$original_name" | sed -E 's/.*jdcloud_re-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/')
-              # 提取固件类型 (如 factory/sysupgrade)
               firmware_type=$(echo "$original_name" | sed -E 's/.*jdcloud_re-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/')
               newname="${REPO_SHORT}-${device_part}-${firmware_type}-${FIRMWARE_TAG}-${CONFIG_TYPE}.bin"
             elif [[ "$original_name" == *"jdcloud-"* ]]; then
-              # 提取设备型号 (如 re-ss-01)
               device_part=$(echo "$original_name" | sed -E 's/.*jdcloud-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/')
-              # 提取固件类型 (如 factory/sysupgrade)
               firmware_type=$(echo "$original_name" | sed -E 's/.*jdcloud-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/')
               newname="${REPO_SHORT}-${device_part}-${firmware_type}-${FIRMWARE_TAG}-${CONFIG_TYPE}.bin"
             else
-              # 默认情况处理
-              # 提取设备型号 (如 re-cs-02)
               device_part=$(echo "$original_name" | sed -E 's/.*immortalwrt-qualcommax-ipq60xx-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/')
-              # 提取固件类型 (如 factory/sysupgrade)
               firmware_type=$(echo "$original_name" | sed -E 's/.*immortalwrt-qualcommax-ipq60xx-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/')
               newname="${REPO_SHORT}-${device_part}-${firmware_type}-${FIRMWARE_TAG}-${CONFIG_TYPE}.bin"
             fi
@@ -183,6 +166,10 @@ jobs:
           fi
         done
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+        
+        # 收集所有.bin文件路径
+        BIN_FILES=$(find $PWD -maxdepth 1 -name "*.bin" -type f | tr '\n' ' ')
+        echo "BIN_FILES=$BIN_FILES" >> $GITHUB_ENV
     - name: Debug Release Variables(调试Release变量)
       if: steps.compile.outputs.status == 'success'
       run: |
@@ -191,10 +178,11 @@ jobs:
         echo "FIRMWARE_TAG: ${{ env.FIRMWARE_TAG }}"
         echo "FIRMWARE_PATH: ${{ env.FIRMWARE_PATH }}"
         echo "DATE: ${{ env.DATE }}"
+        echo "BIN_FILES: ${{ env.BIN_FILES }}"
         echo "=== 检查固件文件 ==="
         ls -la "${{ env.FIRMWARE_PATH }}/"
         echo "=== 检查 .bin 文件 ==="
-        ls -la "${{ env.FIRMWARE_PATH }}/*.bin"
+        find "${{ env.FIRMWARE_PATH }}" -maxdepth 1 -name "*.bin" -type f -exec ls -la {} \;
         echo "=== 检查标签是否存在 ==="
         git tag -l "${{ env.FIRMWARE_TAG }}"
     - name: Upload Firmware To Release(发布固件)
@@ -203,7 +191,7 @@ jobs:
       with:
         name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
         tag_name: ${{ env.FIRMWARE_TAG }}
-        files: ${{ env.FIRMWARE_PATH }}/*.bin
+        files: ${{ env.BIN_FILES }}
         body: |
           **This is OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}**
           ### 📒 固件信息

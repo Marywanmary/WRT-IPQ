@@ -38,8 +38,10 @@ jobs:
       max-parallel: 9
     
     steps:
-    - name: Checkout and Initialize
+    - name: Checkout
       uses: actions/checkout@v4
+
+    - name: Initialize Environment
       run: |
         # 初始化环境并安装依赖
         sudo apt-get update && sudo apt-get install -y $(curl -fsSL is.gd/depends_ubuntu_2204)
@@ -91,7 +93,29 @@ jobs:
           echo "合并后配置文件行数: $(wc -l < "$MERGED_CONFIG") 行"
         fi
 
+    - name: Generate Build Variables
+      run: |
+        set -e
+        cd "$OPENWRT_PATH"
+        make defconfig >/dev/null 2>&1
+        echo "HASH=$(git log -1 --pretty=format:'%h')" >> "$GITHUB_ENV"
+
+    - name: Cache Toolchain
+      uses: actions/cache@v4
+      with:
+        key: ${{ matrix.repo.name }}-${{ env.HASH }}-${{ matrix.config.name }}
+        restore-keys: |
+          ${{ matrix.repo.name }}-
+        path: |
+          ${{ env.OPENWRT_PATH }}/.ccache
+          ${{ env.OPENWRT_PATH }}/staging_dir
+
+    - name: Refresh Cache
+      run: |
+        [[ -d "$OPENWRT_PATH/staging_dir" ]] && find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" -exec find {} -type f -exec touch {} + \;
+
     - name: Load Configuration and Build
+      id: build
       env:
         CONFIG_FILE: ${{ env.CONFIG_FILE }}
         DIY_SCRIPT: scripts/Script.sh
@@ -105,10 +129,6 @@ jobs:
         
         # 运行自定义脚本
         "$GITHUB_WORKSPACE/$DIY_SCRIPT"
-        
-        # 生成变量
-        make defconfig >/dev/null 2>&1
-        echo "HASH=$(git log -1 --pretty=format:'%h')" >> "$GITHUB_ENV"
         
         # 安装feeds
         ./scripts/feeds update -a
@@ -133,22 +153,12 @@ jobs:
         echo "DATE=$(date +'%Y-%m-%d %H:%M:%S')" >> "$GITHUB_ENV"
         echo "FILE_DATE=$(date +'%Y.%m.%d')" >> "$GITHUB_ENV"
 
-    - name: Cache Toolchain
-      uses: actions/cache@v4
-      with:
-        key: ${{ matrix.repo.name }}-${{ env.HASH }}-${{ matrix.config.name }}
-        restore-keys: |
-          ${{ matrix.repo.name }}-
-        path: |
-          ${{ env.OPENWRT_PATH }}/.ccache
-          ${{ env.OPENWRT_PATH }}/staging_dir
+    - name: Check Space Usage
+      if: (!cancelled())
+      run: df -hT
 
-    - name: Refresh Cache
-      run: |
-        [[ -d "$OPENWRT_PATH/staging_dir" ]] && find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" -exec find {} -type f -exec touch {} + \;
-
-    - name: Process and Upload Artifacts
-      if: steps.compile.outputs.status == 'success'
+    - name: Process Artifacts
+      if: steps.build.outputs.status == 'success'
       env:
         REPO_SHORT: ${{ matrix.repo.name }}
         CONFIG_TYPE: ${{ env.CONFIG_TYPE }}
@@ -164,8 +174,11 @@ jobs:
         # 收集和打包软件包
         mkdir -p packages-temp
         mv -f "$OPENWRT_PATH/bin/packages/*/*/*.apk" packages-temp/ 2>/dev/null || true
-        mv -f "$OPENWRT_PATH/bin/packages/*/*/*.ipk packages-temp/ 2>/dev/null || true
-        [[ -d "packages-temp" && $(ls -A packages-temp) ]] && tar -zcf "$REPO_SHORT-$CONFIG_TYPE-packages.tar.gz" -C packages-temp && rm -rf packages-temp
+        mv -f "$OPENWRT_PATH/bin/packages/*/*/*.ipk" packages-temp/ 2>/dev/null || true
+        if [ -d "packages-temp" ] && [ "$(ls -A packages-temp)" ]; then
+          tar -zcf "$REPO_SHORT-$CONFIG_TYPE-packages.tar.gz" -C packages-temp .
+          rm -rf packages-temp
+        fi
         
         # 重命名固件文件
         for file in *.bin; do
@@ -203,7 +216,7 @@ jobs:
         echo "FIRMWARE_PATH=$PWD" >> "$GITHUB_ENV"
 
     - name: Upload Artifacts
-      if: steps.compile.outputs.status == 'success'
+      if: steps.build.outputs.status == 'success'
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ matrix.repo.name }}-${{ matrix.config.name }}
@@ -214,10 +227,6 @@ jobs:
           ${{ env.FIRMWARE_PATH }}/*.manifest
           ${{ env.FIRMWARE_PATH }}/*-packages.tar.gz
         retention-days: 14
-
-    - name: Check Space Usage
-      if: (!cancelled())
-      run: df -hT
 
   # 检查构建结果并创建Release
   Create-Release:
@@ -261,19 +270,25 @@ jobs:
       if: steps.check-builds.outputs.all_builds_success == 'true'
       run: echo "tag=ipq60xx-$(date +'%Y%m%d-%H%M%S')-$(echo "$RANDOM" | cut -c1-4)" >> "$GITHUB_OUTPUT
 
-    - name: Download and Prepare Release
+    - name: Prepare Release Files
       if: steps.check-builds.outputs.all_builds_success == 'true'
       run: |
         set -e
         mkdir -p release-files
-        
-        # 下载所有artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: all-artifacts
-          merge-multiple: false
-        
-        # 创建Release信息文件
+        mkdir -p merged-packages
+
+    - name: Download all artifacts
+      if: steps.check-builds.outputs.all_builds_success == 'true'
+      uses: actions/download-artifact@v4
+      with:
+        path: all-artifacts
+        merge-multiple: false
+
+    - name: Process Release Files
+      if: steps.check-builds.outputs.all_builds_success == 'true'
+      run: |
+        set -e
+        # 创建固件信息文件
         echo "## ipq60xx 固件发布" > release-info.md
         echo "" >> release-info.md
         echo "**发布日期**: $(date +'%Y-%m-%d %H:%M:%S')" >> release-info.md
@@ -283,24 +298,28 @@ jobs:
         echo "| 仓库 | 配置 | 设备 | 类型 | 文件名 |" >> release-info.md
         echo "|------|------|------|------|--------|" >> release-info.md
         
-        # 处理固件文件
+        # 遍历所有artifact目录，处理.bin文件
         find all-artifacts -name "*.bin" | while read file; do
           filename=$(basename "$file")
+          # 从文件名提取信息: ImmWrt-re-cs-02-factory-Pro.bin
           repo=$(echo "$filename" | cut -d'-' -f1)
           device=$(echo "$filename" | cut -d'-' -f2-3 | tr '-' ' ')
           type=$(echo "$filename" | cut -d'-' -f4)
           config=$(echo "$filename" | cut -d'-' -f5 | cut -d'.' -f1)
           
+          # 复制.bin文件到统一目录
           cp "$file" release-files/
+          
+          # 记录信息
           echo "| $repo | $config | $device | $type | $filename |" >> release-info.md
         done
         
-        # 收集配置和清单文件
+        # 收集所有config、config.buildinfo、manifest文件
         find all-artifacts -name "*.config" ! -name "*packages*" -exec cp {} release-files/ \;
         find all-artifacts -name "*.config.buildinfo" -exec cp {} release-files/ \;
         find all-artifacts -name "*.manifest" -exec cp {} release-files/ \;
         
-        # 合并软件包
+        # 合并所有packages文件（剔除重复项）
         echo "### 软件包信息" >> release-info.md
         echo "" >> release-info.md
         echo "本Release包含以下软件包（已剔除重复项）：" >> release-info.md
@@ -308,8 +327,95 @@ jobs:
         echo "| 软件包名 | 大小 | 来源任务 |" >> release-info.md
         echo "|---------|------|------|--------|" >> release-info.md
         
+        # 创建临时目录用于合并软件包
         mkdir -p temp-packages
+        
+        # 处理所有packages文件
         find all-artifacts -name "*-packages.tar.gz" | while read pkg_file; do
+          # 提取任务名称
           task_name=$(basename "$pkg_file" | sed 's/-packages.tar.gz$//')
+          
+          # 解压到临时目录
           mkdir -p "temp-$task_name"
-          tar
+          tar -zxf "$pkg_file" -C "temp-$task_name"
+          
+          # 处理每个软件包
+          find "temp-$task_name" -type f | while read pkg; do
+            pkg_name=$(basename "$pkg")
+            pkg_size=$(du -h "$pkg" | cut -f1)
+            
+            # 检查是否已存在同名软件包
+            if [ -f "temp-packages/$pkg_name" ]; then
+              echo "跳过重复软件包: $pkg_name (来自 $task_name)"
+            else
+              # 复制软件包到合并目录
+              cp "$pkg" "temp-packages/"
+              
+              # 记录软件包信息（简化版本提取）
+              if [[ "$pkg_name" == *.ipk ]]; then
+                version=$(tar -tzf "$pkg" control/control 2>/dev/null | grep "^Version:" | cut -d' ' -f2 2>/dev/null || echo "N/A")
+              else
+                version="N/A"
+              fi
+              
+              # 记录软件包信息
+              echo "| $pkg_name | $version | $pkg_size | $task_name |" >> release-info.md
+            fi
+          done
+          
+          # 清理临时目录
+          rm -rf "temp-$task_name"
+        done
+        
+        # 打包合并后的软件包
+        if [ -d "temp-packages" ] && [ "$(ls -A temp-packages)" ]; then
+          tar -zcf release-files/packages.tar.gz -C temp-packages .
+          echo "" >> release-info.md
+          echo "**注意**: 所有软件包已合并到 `packages.tar.gz` 文件中。" >> release-info.md
+        else
+          echo "" >> release-info.md
+          echo "**注意**: 未找到任何软件包。" >> release-info.md
+        fi
+        
+        # 清理临时目录
+        rm -rf temp-packages
+
+    - name: Create Release and Upload Files
+      if: steps.check-builds.outputs.all_builds_success == 'true'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -e
+        # 创建Release并上传所有文件
+        gh release create "${{ steps.tag.outputs.tag }}" \
+          --title "ipq60xx Firmware $(date +'%Y-%m-%d')" \
+          --notes-file release-info.md \
+          release-files/*
+        
+        # 验证Release是否创建成功
+        if gh release view "${{ steps.tag.outputs.tag }}" >/dev/null 2>&1; then
+          echo "Release创建成功"
+        else
+          echo "错误: Release创建失败"
+          exit 1
+        fi
+
+    - name: Notify Build Failures
+      if: steps.check-builds.outputs.all_builds_success == 'false'
+      run: |
+        echo "部分构建作业失败，已跳过Release创建"
+        echo "请查看构建日志以获取详细信息"
+        echo "失败的构建作业:"
+        for repo in ImmWrt OpenWrt LibWrt; do
+          for config in Pro Max Ultra; do
+            job_name="Build ($repo, $config)"
+            job_status=$(gh run view "${{ github.run_id }}" --json jobs --jq \
+              --arg name "$job_name" \
+              '.jobs[] | select(.name == $name) | .status')
+            if [ "$job_status" != "success" ]; then
+              echo "- $job_name (状态: $job_status)"
+            fi
+          done
+        done
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

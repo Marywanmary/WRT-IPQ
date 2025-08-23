@@ -112,7 +112,11 @@ jobs:
 
     - name: Refresh Cache
       run: |
-        [[ -d "$OPENWRT_PATH/staging_dir" ]] && find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" -exec find {} -type f -exec touch {} + \;
+        if [[ -d "$OPENWRT_PATH/staging_dir" ]]; then
+            find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
+                find "$dir" -type f -exec touch {} \;
+            done
+        fi
 
     - name: Load Configuration and Build
       id: build
@@ -268,7 +272,7 @@ jobs:
     - name: Generate Release Tag
       id: tag
       if: steps.check-builds.outputs.all_builds_success == 'true'
-      run: echo "tag=ipq60xx-$(date +'%Y%m%d-%H%M%S')-$(echo "$RANDOM" | cut -c1-4)" >> "$GITHUB_OUTPUT
+      run: echo "tag=ipq60xx-$(date +'%Y%m%d-%H%M%S')-$(echo "$RANDOM" | cut -c1-4)" >> "$GITHUB_OUTPUT"
 
     - name: Prepare Release Files
       if: steps.check-builds.outputs.all_builds_success == 'true'

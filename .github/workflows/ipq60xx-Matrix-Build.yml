@@ -34,7 +34,7 @@ jobs:
             file: configs/ipq60xx_Max.config
           - name: Ultra
             file: configs/ipq60xx_Ultra.config
-      max-parallel: 9  # 增加并发数以处理所有组合
+      max-parallel: 9
     
     steps:
     - name: Check Dependencies
@@ -243,28 +243,47 @@ jobs:
             original_name="$file"
             echo "处理文件: $original_name"
             
-            # 提取设备型号和固件类型
-            if [[ "$original_name" == *"jdcloud_re-"* ]]; then
-              # 提取设备型号 (如 re-cs-02)
-              device_part=$(echo "$original_name" | sed -E 's/.*jdcloud_re-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/' || echo "unknown")
-              # 提取固件类型 (如 factory/sysupgrade)
-              firmware_type=$(echo "$original_name" | sed -E 's/.*jdcloud_re-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/' || echo "unknown")
-              newname="${REPO_SHORT}-${device_part}-${firmware_type}-${CONFIG_TYPE}.bin"
-            elif [[ "$original_name" == *"jdcloud-"* ]]; then
-              # 提取设备型号 (如 re-ss-01)
-              device_part=$(echo "$original_name" | sed -E 's/.*jdcloud-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/' || echo "unknown")
-              # 提取固件类型 (如 factory/sysupgrade)
-              firmware_type=$(echo "$original_name" | sed -E 's/.*jdcloud-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/' || echo "unknown")
-              newname="${REPO_SHORT}-${device_part}-${firmware_type}-${CONFIG_TYPE}.bin"
-            else
-              # 默认情况处理
-              # 提取设备型号 (如 re-cs-02)
-              device_part=$(echo "$original_name" | sed -E 's/.*immortalwrt-qualcommax-ipq60xx-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\1/' || echo "unknown")
-              # 提取固件类型 (如 factory/sysupgrade)
-              firmware_type=$(echo "$original_name" | sed -E 's/.*immortalwrt-qualcommax-ipq60xx-([a-zA-Z0-9_-]+)-squashfs-(.*)\.bin/\2/' || echo "unknown")
-              newname="${REPO_SHORT}-${device_part}-${firmware_type}-${CONFIG_TYPE}.bin"
+            # 通用文件名解析函数
+            parse_filename() {
+              local filename="$1"
+              local name_without_suffix="${filename%.bin}"
+              
+              # 尝试提取设备型号和固件类型
+              # 模式1: 包含"-squashfs-"的文件名
+              if [[ "$name_without_suffix" == *"-squashfs-"* ]]; then
+                # 提取"-squashfs-"之前的部分作为设备型号
+                device_part="${name_without_suffix%%-squashfs-*}"
+                # 提取"-squashfs-"之后的部分作为固件类型
+                firmware_type="${name_without_suffix#*-squashfs-}"
+              else
+                # 模式2: 不包含"-squashfs-"的文件名
+                # 使用最后一个"-"分割
+                device_part="${name_without_suffix%-*}"
+                firmware_type="${name_without_suffix##*-}"
+              fi
+              
+              # 清理设备型号中的前缀（如jdcloud_re, jdcloud, immortalwrt-qualcommax-ipq60xx）
+              # 移除常见前缀
+              device_part="${device_part#jdcloud_re-}"
+              device_part="${device_part#jdcloud-}"
+              device_part="${device_part#immortalwrt-qualcommax-ipq60xx-}"
+              
+              echo "$device_part|$firmware_type"
+            }
+            
+            # 解析文件名
+            parsed_result=$(parse_filename "$original_name")
+            device_part=$(echo "$parsed_result" | cut -d'|' -f1)
+            firmware_type=$(echo "$parsed_result" | cut -d'|' -f2)
+            
+            # 验证解析结果
+            if [ -z "$device_part" ] || [ -z "$firmware_type" ]; then
+              echo "警告: 无法从文件名 $original_name 中提取设备型号和固件类型，跳过重命名"
+              continue
             fi
             
+            # 构建新文件名
+            newname="${REPO_SHORT}-${device_part}-${firmware_type}-${CONFIG_TYPE}.bin"
             echo "重命名 $original_name 为 $newname"
             mv "$original_name" "$newname"
           else
@@ -313,7 +332,7 @@ jobs:
         echo "配置: $CONFIG_NAME"
         
         # 构建缓存键前缀（匹配简化后的格式）
-        CACHE_PREFIX="${REPO_NAME}-"
+        CACHE_PREFIX="${REPO_NAME}-${CONFIG_NAME}-"
         echo "缓存键前缀: $CACHE_PREFIX"
         
         # 获取缓存列表并删除，忽略错误
@@ -339,14 +358,6 @@ jobs:
     needs: Build
     runs-on: ubuntu-latest
     steps:
-    - name: Install GitHub CLI
-      run: |
-        # 安装GitHub CLI
-        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-        sudo apt-get update
-        sudo apt-get install gh
-
     - name: Generate release tag
       id: tag
       run: echo "tag=ipq60xx-$(date '+%Y%m%d-%H%M%S')-$(echo $RANDOM | cut -c1-4)" >> $GITHUB_OUTPUT
@@ -430,7 +441,7 @@ jobs:
               if [[ "$pkg_name" == *.ipk ]]; then
                 version=$(tar -tzf "$pkg" control/control 2>/dev/null | grep "^Version:" | cut -d' ' -f2 2>/dev/null || echo "N/A")
               elif [[ "$pkg_name" == *.apk ]]; then
-                version=$(aapt dump badging "$pkg" 2>/dev/null | grep "package: name=" | cut -d"'" -f4 2>/dev/null || echo "N/A")
+                version="N/A"  # 简化处理，避免依赖aapt
               else
                 version="N/A"
               fi

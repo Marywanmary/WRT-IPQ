@@ -62,7 +62,7 @@ jobs:
         sudo timedatectl set-timezone "$TZ"
 
     - name: Checkout(检出代码)
-      uses: actions/checkout@main
+      uses: actions/checkout@v4
 
     - name: Clone Source Code(克隆源代码)
       env:
@@ -156,18 +156,15 @@ jobs:
         set -e
         cd $OPENWRT_PATH
         make defconfig > /dev/null 2>&1
-        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
-        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
+        # 只保留HASH变量，删除DEVICE_TARGET和DEVICE_SUBTARGET
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
-        echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
 
     - name: Cache Toolchain(缓存工具链)
-      uses: actions/cache@main
+      uses: actions/cache@v4
       with:
-        key: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.HASH }}-${{ env.CACHE_DATE }}-${{ matrix.repo.name }}-${{ matrix.config.name }}
-        restore-keys: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
+        key: ${{ matrix.repo.name }}-${{ env.HASH }}-${{ matrix.config.name }}
+        restore-keys: |
+          ${{ matrix.repo.name }}-
         path: |
           ${{ env.OPENWRT_PATH }}/.ccache
           ${{ env.OPENWRT_PATH }}/staging_dir
@@ -299,19 +296,43 @@ jobs:
     - name: Delete Old Cache
       if: always()
       run: |
-        set -e
         # 为当前仓库清理缓存
-        echo "清理缓存: ${{ env.SOURCE_REPO }}"
-        gh cache list --key "${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-" --json key --jq '.[] | .key' | while read -r key; do
-          gh cache delete "$key"
+        echo "清理缓存: ${{ matrix.repo.name }}"
+        
+        # 检查GitHub CLI权限
+        if ! gh auth status &>/dev/null; then
+          echo "警告: GitHub CLI未正确认证，跳过缓存清理"
+          exit 0
+        fi
+        
+        # 使用简化的缓存键前缀
+        REPO_NAME="${{ matrix.repo.name }}"
+        CONFIG_NAME="${{ matrix.config.name }}"
+        
+        echo "仓库: $REPO_NAME"
+        echo "配置: $CONFIG_NAME"
+        
+        # 构建缓存键前缀（匹配简化后的格式）
+        CACHE_PREFIX="${REPO_NAME}-"
+        echo "缓存键前缀: $CACHE_PREFIX"
+        
+        # 获取缓存列表并删除，忽略错误
+        gh cache list --key "$CACHE_PREFIX" --json key --jq '.[] | .key' | while read -r key; do
+          echo "尝试删除缓存: $key"
+          if ! gh cache delete "$key" &>/dev/null; then
+            echo "删除缓存失败: $key (可能已被删除或无权限)"
+          else
+            echo "成功删除缓存: $key"
+          fi
         done
         
         # 输出缓存状态
         echo "========cache status========"
-        echo "ccache: $(du -sh $OPENWRT_PATH/.ccache | cut -f 1)"
-        echo "staging: $(du -sh $OPENWRT_PATH/staging_dir | cut -f 1)"
+        echo "ccache: $(du -sh $OPENWRT_PATH/.ccache 2>/dev/null | cut -f1 || echo "N/A")"
+        echo "staging: $(du -sh $OPENWRT_PATH/staging_dir 2>/dev/null | cut -f1 || echo "N/A")"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      continue-on-error: true  # 即使这一步失败，也继续执行
 
   # 新增作业：创建Release并上传所有固件
   Create-Release:
@@ -454,13 +475,3 @@ jobs:
           echo "错误: Release创建失败"
           exit 1
         fi
-
-    - name: Delete Old Releases (keep latest 5)
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        # 保留最新的5个Release，删除旧的
-        gh release list --limit 100 --json tagName --jq '.[].tagName' | grep 'ipq60xx-' | sort -r | tail -n +6 | while read tag; do
-          echo "删除旧Release: $tag"
-          gh release delete "$tag" --yes
-        done

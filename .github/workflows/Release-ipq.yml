@@ -80,7 +80,7 @@ jobs:
           echo "BUILD_SRC=$BUILD_SRC" >> $GITHUB_ENV
 
       - name: Pre Clone
-        run: ./pre_clone_action.sh ${{ env.CURRENT_MODEL }}
+        run: ./scripts/pre_clone_action_QW.sh ${{ env.CURRENT_MODEL }}
 
       - name: Cache Dependencies
         uses: actions/cache@v4
@@ -101,7 +101,7 @@ jobs:
           fi
 
       - name: Build Firmware
-        run: ./build.sh ${{ env.CURRENT_MODEL }}
+        run: ./scripts/buid_QW.sh ${{ env.CURRENT_MODEL }}
 
       - name: Get Kernel Version
         run: |

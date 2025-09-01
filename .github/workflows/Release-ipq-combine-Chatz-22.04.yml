@@ -67,8 +67,7 @@ jobs:
 
       - name: Set execute permissions for scripts
         run: |
-          chmod +x ./scripts/build_Chatz.sh
-          chmod +x ./scripts/update.sh
+          chmod +x ./scripts/*.sh
 
       - name: Set Build Date and Timezone
         run: |

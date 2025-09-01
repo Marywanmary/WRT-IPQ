@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -e
-BASE_PATH=$(cd $(dirname $0) && pwd)
-Dev=$1
+#BASE_PATH=$(cd $(dirname $0) && pwd)
+# 绝对路径定义工作区域根目录
+BASE_PATH="$(dirname "$(dirname "$(readlink -f "$0")")")"Dev=$1
 Build_Mod=$2
 CONFIG_FILE="$BASE_PATH/deconfig/$Dev.config"
 INI_FILE="$BASE_PATH/compilecfg/$Dev.ini"

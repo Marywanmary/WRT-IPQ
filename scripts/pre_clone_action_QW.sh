@@ -70,8 +70,12 @@ if [[ -d $BASE_PATH/action_build ]]; then
 fi
 
 # --- 调用 update.sh ---
-log "Calling update.sh..."
-$BASE_PATH/update.sh "$REPO_URL" "$REPO_BRANCH" "$BASE_PATH/$BUILD_DIR" "$COMMIT_HASH"
+#log "Calling update.sh..."
+#$BASE_PATH/update.sh "$REPO_URL" "$REPO_BRANCH" "$BASE_PATH/$BUILD_DIR" "$COMMIT_HASH"
+
+# --- 调用 Script.sh ---
+log "Calling Script.sh..."
+$BASE_PATH/scripts/Script.sh "$REPO_URL" "$REPO_BRANCH" "$BASE_PATH/$BUILD_DIR" "$COMMIT_HASH"
 
 # --- 应用配置 ---
 log "Applying configuration..."

@@ -66,10 +66,6 @@ jobs:
           # 为所有shell脚本添加执行权限
           find . -name "*.sh" -type f -exec chmod +x {} \;
 
-      # 步骤4.5：加载自定义配置
-      - name: Load Custom Configuration
-        run: ./scripts/script.sh ${{ matrix.model }}
-          
       # 步骤5：设置构建日期和时区
       - name: Set Build Date and Timezone
         run: |
@@ -86,7 +82,11 @@ jobs:
       # 步骤6：预克隆操作
       - name: Pre Clone
         run: ./scripts/pre_clone_action.sh ${{ matrix.model }}
-        
+
+      # 步骤6.5：加载自定义配置
+      - name: Load Custom Configuration
+        run: ./scripts/script.sh ${{ matrix.model }}
+      
       # 步骤7：缓存依赖项
       - name: Cache Dependencies
         uses: actions/cache@v4

@@ -64,7 +64,7 @@ jobs:
         run: |
           echo "=== 设置执行权限 ==="
           # 为所有shell脚本添加执行权限
-          find . -name "*.sh" -type f -exec sh -c 'head -n1 "$1" | grep -q "^#!/" && chmod +x "$1"' _ {} \;
+          find . -name "*.sh" -type f -exec chmod +x {} \;
 
       # 步骤4.5：加载自定义配置
       - name: Load Custom Configuration

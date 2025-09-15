@@ -72,8 +72,8 @@ if [[ -d $BASE_PATH/action_build ]]; then
     BUILD_DIR="action_build"
 fi
 
-# 执行更新脚本，传入仓库地址、分支、构建目录和提交哈希值
-"$SCRIPT_DIR/update.sh" "$REPO_URL" "$REPO_BRANCH" "$BASE_PATH/$BUILD_DIR" "$COMMIT_HASH"
+# # 执行更新脚本，传入仓库地址、分支、构建目录和提交哈希值
+# "$SCRIPT_DIR/update.sh" "$REPO_URL" "$REPO_BRANCH" "$BASE_PATH/$BUILD_DIR" "$COMMIT_HASH"
 
 # 应用配置文件
 apply_config

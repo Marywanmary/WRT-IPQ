@@ -43,17 +43,13 @@ jobs:
         
       # 步骤2：设置构建环境
       - name: Build System Setup
+        env:
+         DEBIAN_FRONTEND: noninteractive
         run: |
-          # 执行官方构建环境初始化脚本
-          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
-          # 安装额外依赖包
-          sudo -E apt -yqq install dos2unix
-          sudo -E apt -yqq install libfuse-dev
-          # 清理不需要的软件包
-          sudo -E apt -yqq autoremove --purge
-          sudo -E apt -yqq autoclean
-          sudo -E apt -yqq clean
-          sudo -E systemctl daemon-reload
+         sudo -E apt-get -y update
+         sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
+         sudo -E systemctl daemon-reload
+         sudo timedatectl set-timezone "$TZ"
           
       # 步骤3：检出代码
       - name: Checkout

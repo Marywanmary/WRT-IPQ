@@ -62,6 +62,10 @@ jobs:
           echo "=== 设置执行权限 ==="
           # 为所有shell脚本添加执行权限
           find . -name "*.sh" -type f -exec sh -c 'head -n1 "$1" | grep -q "^#!/" && chmod +x "$1"' _ {} \;
+
+      # 步骤4.5：加载自定义配置
+      - name: Load Custom Configuration
+        run: ./scripts/script.sh ${{ matrix.model }}
           
       # 步骤5：设置构建日期和时区
       - name: Set Build Date and Timezone

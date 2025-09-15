@@ -24,6 +24,9 @@ jobs:
           - ipq60xx_immwrt_Pro
           - ipq60xx_immwrt_Max
           - ipq60xx_immwrt_Ultra
+          - ipq60xx_openwrt_Pro
+          - ipq60xx_openwrt_Max
+          - ipq60xx_openwrt_Ultra
           - ipq60xx_libwrt_Pro
           - ipq60xx_libwrt_Max
           - ipq60xx_libwrt_Ultra
@@ -219,6 +222,9 @@ jobs:
           echo "- ipq60xx_immwrt_Pro" >> release_body.txt
           echo "- ipq60xx_immwrt_Max" >> release_body.txt
           echo "- ipq60xx_immwrt_Ultra" >> release_body.txt
+          echo "- ipq60xx_openwrt_Pro" >> release_body.txt
+          echo "- ipq60xx_openwrt_Max" >> release_body.txt
+          echo "- ipq60xx_openwrt_Ultra" >> release_body.txt
           echo "- ipq60xx_libwrt_Pro" >> release_body.txt
           echo "- ipq60xx_libwrt_Max" >> release_body.txt
           echo "- ipq60xx_libwrt_Ultra" >> release_body.txt

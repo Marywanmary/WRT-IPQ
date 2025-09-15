@@ -46,6 +46,6 @@ git clone --depth=1 https://github.com/lwb1978/openwrt-gecoosac package/openwrt-
 git clone --depth=1 https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led
 chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
 
-#./scripts/feeds init
+./scripts/feeds init
 ./scripts/feeds update -a
 ./scripts/feeds install -a

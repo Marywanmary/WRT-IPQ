@@ -1,0 +1,360 @@
+# 文件名: release_IPQ60XX-QW.yml
+
+name: Release-IPQ60XX-QW
+on:
+  workflow_dispatch: # 手动触发
+  workflow_call:     # 被其他工作流调用
+  schedule:
+    - cron: '0 20 * * 4' # 每周四晚上8点运行 (UTC+8)
+
+env:
+  # 通用环境变量
+  # REPO_URL 和 REPO_BRANCH 将在下面的 Parse Model Info 步骤中动态设置
+  # CONFIG_FILE 和 GENERAL_CONFIG_FILE 将在下面的 Parse Model Info 步骤中动态设置
+  GENERAL_CONFIG_FILE: deconfig/General.config # 修改配置文件路径
+  DIY_SCRIPT: scripts/Roc-script.sh
+  CLASH_KERNEL: amd64
+  UPLOAD_BIN_DIR: false
+  FIRMWARE_RELEASE: true
+  FIRMWARE_TAG: IPQ60XX-Builds # 发布标签
+  TZ: Asia/Shanghai
+  # 定义所有需要编译的设备模型及其对应的仓库、分支和配置
+  MODELS: |
+    ipq60xx_immwrt_Pro
+    ipq60xx_immwrt_Max
+    ipq60xx_immwrt_Ultra
+    ipq60xx_openwrt_Pro
+    ipq60xx_openwrt_Max
+    ipq60xx_openwrt_Ultra
+    ipq60xx_libwrt_Pro
+    ipq60xx_libwrt_Max
+    ipq60xx_libwrt_Ultra
+
+jobs:
+  Build:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        model: ${{ fromJSON(env.MODELS) }} # 为每个模型并行运行一个 job
+    steps:
+    - name: 检查服务器性能(Check Server Performance)
+      run: |
+        echo "警告⚠"
+        echo "分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
+        echo -e "已知CPU型号（降序）：7763，8370C，8272CL，8171M，E5-2673 
+"
+        echo "--------------------------CPU信息--------------------------"
+        echo "CPU物理数量：$(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
+        echo -e "CPU核心信息：$(cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c) 
+"
+        echo "--------------------------内存信息--------------------------"
+        echo "已安装内存详细信息："
+        echo -e "$(sudo lshw -short -C memory | grep GiB) 
+"
+        echo "--------------------------硬盘信息--------------------------"
+        echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+
+    - name: 初始化环境(Initialization Environment)
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo -E apt-get -y update
+        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
+        sudo -E systemctl daemon-reload
+        sudo timedatectl set-timezone "$TZ"
+
+    - name: 检出代码(Checkout)
+      uses: actions/checkout@main
+
+    - name: 解析模型信息(Parse Model Info)
+      id: parse_model
+      run: |
+        MODEL="${{ matrix.model }}"
+        echo "当前模型 (MODEL): $MODEL" >> $GITHUB_ENV
+
+        # 分解模型名称
+        CHIP=$(echo "$MODEL" | cut -d'_' -f1) # ipq60xx
+        BRANCH_ABBR=$(echo "$MODEL" | cut -d'_' -f2) # immwrt, openwrt, libwrt
+        DEVICE_TYPE=$(echo "$MODEL" | cut -d'_' -f3) # Pro, Max, Ultra
+
+        echo "芯片 (CHIP): $CHIP" >> $GITHUB_ENV
+        echo "分支缩写 (BRANCH_ABBR): $BRANCH_ABBR" >> $GITHUB_ENV
+        echo "设备类型 (DEVICE_TYPE): $DEVICE_TYPE" >> $GITHUB_ENV
+
+        # 根据分支缩写设置仓库 URL 和分支
+        case "$BRANCH_ABBR" in
+          immwrt)
+            REPO_URL="https://github.com/laipeng668/immortalwrt.git"
+            REPO_BRANCH="master"
+            ;;
+          openwrt)
+            REPO_URL="https://github.com/laipeng668/openwrt.git"
+            REPO_BRANCH="master"
+            ;;
+          libwrt)
+            REPO_URL="https://github.com/laipeng668/immortalwrt.git"
+            REPO_BRANCH="k6.12-nss"
+            ;;
+          *)
+            echo "不支持的分支缩写: $BRANCH_ABBR"
+            exit 1
+            ;;
+        esac
+
+        echo "仓库 URL (REPO_URL): $REPO_URL" >> $GITHUB_ENV
+        echo "仓库分支 (REPO_BRANCH): $REPO_BRANCH" >> $GITHUB_ENV
+
+        # 根据设备类型设置配置文件路径
+        case "$DEVICE_TYPE" in
+          Pro)
+            CONFIG_FILE="deconfig/Pro.config" # 修改配置文件路径
+            ;;
+          Max)
+            CONFIG_FILE="deconfig/Max.config" # 修改配置文件路径
+            ;;
+          Ultra)
+            CONFIG_FILE="deconfig/Ultra.config" # 修改配置文件路径
+            ;;
+          *)
+            echo "不支持的设备类型: $DEVICE_TYPE"
+            exit 1
+            ;;
+        esac
+
+        echo "配置文件 (CONFIG_FILE): $CONFIG_FILE" >> $GITHUB_ENV
+
+        # 构建最终配置文件路径 (General.config + 特定配置文件)
+        FINAL_CONFIG_FILE="$GENERAL_CONFIG_FILE"
+        if [ "$DEVICE_TYPE" = "Pro" ] || [ "$DEVICE_TYPE" = "Max" ] || [ "$DEVICE_TYPE" = "Ultra" ]; then
+          FINAL_CONFIG_FILE="$FINAL_CONFIG_FILE $CONFIG_FILE"
+          # 如果是 libwrt，则附加 libwrt.config
+          if [ "$BRANCH_ABBR" = "libwrt" ]; then
+            FINAL_CONFIG_FILE="$FINAL_CONFIG_FILE deconfig/libwrt.config" # 修改配置文件路径
+          fi
+        fi
+        echo "最终配置文件 (FINAL_CONFIG_FILE): $FINAL_CONFIG_FILE" >> $GITHUB_ENV
+
+    - name: 克隆源代码(Clone Source Code)
+      run: |
+        df -hT $GITHUB_WORKSPACE
+        sudo mkdir -p /mnt/openwrt
+        sudo chown -R $(id -u):$(id -g) /mnt/openwrt
+        # 使用动态设置的 REPO_URL 和 REPO_BRANCH
+        git clone --depth 1 -b ${{ env.REPO_BRANCH }} --single-branch ${{ env.REPO_URL }} /mnt/openwrt
+        cd /mnt/openwrt
+        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+        VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
+        echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
+        VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12)
+        echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
+
+    - name: 生成变量(Generate Variables)
+      run: |
+        cd $OPENWRT_PATH
+        # 使用动态设置的 FINAL_CONFIG_FILE
+        cat ${{ env.FINAL_CONFIG_FILE }} > .config
+        make defconfig > /dev/null 2>&1
+        SOURCE_REPO="$(echo ${{ env.REPO_URL }} | awk -F '/' '{print $(NF)}')"
+        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
+        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
+        echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
+        echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+
+    - name: 缓存工具链(Cache Toolchain)
+      uses: actions/cache@main
+      with:
+        # 修改缓存键，使用 DEVICE_TARGET 和 HASH，不再包含 REPO_URL 和 REPO_BRANCH
+        key: ${{ env.DEVICE_TARGET }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
+        # 修改恢复键，只匹配 DEVICE_TARGET 和 HASH
+        restore-keys: ${{ env.DEVICE_TARGET }}-${{ env.HASH }}-
+        path: |
+          ${{ env.OPENWRT_PATH }}/.ccache
+          ${{ env.OPENWRT_PATH }}/staging_dir
+
+    - name: 刷新缓存(Refresh The Cache)
+      run: |
+        if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+          find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
+              find "$dir" -type f -exec touch {} +
+          done
+        fi
+
+    - name: 安装 feeds(Install Feeds)
+      run: |
+        cd $OPENWRT_PATH
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: 加载自定义配置(Load Custom Configuration)
+      run: |
+        chmod +x ${{ env.DIY_SCRIPT }}
+        cd $OPENWRT_PATH
+        $GITHUB_WORKSPACE/${{ env.DIY_SCRIPT }}
+
+    - name: 下载 DL 软件包(Download DL Package)
+      run: |
+        cd $OPENWRT_PATH
+        # 这里可以省略 cat ... > .config，因为我们已经在 Generate Variables 步骤中完成了
+        # make defconfig # 已经在上一步完成
+        make download -j$(nproc)
+
+    - name: 开始编译固件(Compile Firmware)
+      id: compile
+      run: |
+        cd $OPENWRT_PATH
+        echo -e "$(nproc) 线程编译"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+
+    - name: 检查空间使用情况(Check Space Usage)
+      if: (!cancelled())
+      run: df -hT
+
+    - name: 整理文件(Organize Files)
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        cd $OPENWRT_PATH/bin/targets/*/*
+        echo "当前目录: $(pwd)"
+
+        # 获取原始文件名 (假设只有一个 bin 文件)
+        ORIGINAL_BIN=$(find . -maxdepth 1 -type f -name "*.bin" | head -n 1)
+        if [ -z "$ORIGINAL_BIN" ]; then
+           echo "未找到 .bin 文件!"
+           exit 1
+        fi
+        echo "原始二进制文件: $ORIGINAL_BIN"
+
+        # 提取原始文件名中的固件型号 (re-ss-01 或 re-cs-02)
+        ORIG_MODEL_NAME=$(basename "$ORIGINAL_BIN" | sed -n 's/.*\([re]-[a-z0-9]\{2\}-[0-9]\{2\}\).*/\1/p')
+        if [ -z "$ORIG_MODEL_NAME" ]; then
+           echo "无法从 $ORIGINAL_BIN 中提取型号名称"
+           exit 1
+        fi
+        echo "原始型号名称: $ORIG_MODEL_NAME"
+
+        # 确定文件类型 (factory or sysupgrade)
+        FILE_TYPE=$(basename "$ORIGINAL_BIN" | sed -n 's/.*\.\(squashfs\)-\(factory\|sysupgrade\)\..*/\2/p')
+        if [ -z "$FILE_TYPE" ]; then
+           echo "无法确定文件类型从 $ORIGINAL_BIN"
+           exit 1
+        fi
+        echo "文件类型: $FILE_TYPE"
+
+        # 构造新文件名
+        # 规则: 分支缩写 + 固件型号 + 文件类型 + 配置 (如: immwrt-re-cs-02-factory-Pro.bin)
+        NEW_FILENAME="${{ env.BRANCH_ABBR }}-${ORIG_MODEL_NAME}-${FILE_TYPE}-${{ env.DEVICE_TYPE }}.bin"
+        echo "新文件名将是: $NEW_FILENAME"
+
+        # 复制并重命名
+        cp "$ORIGINAL_BIN" "$NEW_FILENAME"
+        echo "已将 $ORIGINAL_BIN 重命名为 $NEW_FILENAME"
+
+        # 复制 config.buildinfo, manifest, Packages.manifest 到输出目录
+        # 注意: config.buildinfo 和 manifest 通常在 bin/targets 下的子目录中
+        # 为了简化，我们假设它们在当前目录或 bin/targets 下的某个位置
+        # 如果需要精确路径，请根据实际情况调整
+        echo "尝试复制 config.buildinfo..."
+        if [ -f "config.buildinfo" ]; then
+            cp config.buildinfo "${{ env.CHIP }}-${{ env.BRANCH_ABBR }}-${{ env.DEVICE_TYPE }}.config.buildinfo"
+            echo "已复制 config.buildinfo"
+        else
+            echo "未找到 config.buildinfo"
+        fi
+
+        echo "尝试复制 Packages.manifest..."
+        if [ -f "Packages.manifest" ]; then
+            cp Packages.manifest "${{ env.CHIP }}-${{ env.BRANCH_ABBR }}-${{ env.DEVICE_TYPE }}.Packages.manifest"
+            echo "已复制 Packages.manifest"
+        else
+            echo "未找到 Packages.manifest"
+        fi
+
+        # 复制 .config 文件
+        echo "尝试复制 .config..."
+        if [ -f "$OPENWRT_PATH/.config" ]; then
+            cp "$OPENWRT_PATH/.config" "${{ env.CHIP }}-${{ env.BRANCH_ABBR }}-${{ env.DEVICE_TYPE }}.config"
+            echo "已复制 .config"
+        else
+            echo "未找到 .config"
+        fi
+
+        # 创建输出目录用于收集所有产物
+        mkdir -p ${{ github.workspace }}/firmware_output
+        cp *.bin ${{ github.workspace }}/firmware_output/
+        cp *.buildinfo ${{ github.workspace }}/firmware_output/
+        cp *.manifest ${{ github.workspace }}/firmware_output/
+        cp ${{ env.CHIP }}-${{ env.BRANCH_ABBR }}-${{ env.DEVICE_TYPE }}.config ${{ github.workspace }}/firmware_output/
+
+    - name: 上传固件到 Artifact(Upload Firmware To Artifact)
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ env.SOURCE_REPO }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}-${{ matrix.model }}
+        path: ${{ github.workspace }}/firmware_output/*
+
+    # 注意：此处不会直接上传到 release，因为每个 job 实例都独立运行。
+    # 我们将在后续的合并 job 中处理上传到 release。
+
+  # 合并所有编译结果并发布到 Release
+  Publish_Release:
+    needs: Build # 等待所有 Build jobs 完成
+    runs-on: ubuntu-22.04
+    if: always() # 即使某个 Build job 失败也尝试执行此 job (可选)
+    steps:
+    - name: 下载所有 Artifact(Download All Artifacts)
+      uses: actions/download-artifact@main
+      with:
+        path: ./artifacts
+
+    - name: 创建发布资产目录(Create Release Assets Directory)
+      run: |
+        mkdir -p ./release_assets
+
+    - name: 移动并重命名资产(Move and Rename Assets)
+      run: |
+        # 遍历所有下载的工件
+        for artifact_dir in ./artifacts/*; do
+          if [ -d "$artifact_dir" ]; then
+            echo "处理工件目录: $artifact_dir"
+            # 移动文件到统一目录
+            cp -r "$artifact_dir"/* ./release_assets/
+          fi
+        done
+
+    - name: 上传固件到 Release(Upload Firmware To Release)
+      if: env.FIRMWARE_RELEASE == 'true'
+      uses: ncipollo/release-action@main
+      with:
+        name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
+        allowUpdates: true
+        tag: ${{ env.FIRMWARE_TAG }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        artifacts: ./release_assets/*
+        body: |
+          **这是为 ${{ env.FIRMWARE_TAG }} 平台构建的 OpenWrt 固件**
+          ### 📒 固件信息
+          - 包含多个设备平台的固件构建。
+          - 💻 请根据您的设备型号选择对应的固件。
+          - ⚽ 固件源码: https://github.com/laipeng668/immortalwrt.git
+          - 💝 源码分支: master/k6.12-nss
+          - 🌐 默认地址: **192.168.2.1**
+          - 🔑 默认密码: none
+          ### 🧊 固件版本
+          - 固件内核版本：**${{ env.VERSION_KERNEL }}**
+          - 固件编译前最后一次➦[主源码](https://github.com/laipeng668/immortalwrt.git)更新记录
+          - ${{ env.VERSION_INFO }}
+          ### 📦 已包含的设备
+          - ipq60xx_immwrt_Pro
+          - ipq60xx_immwrt_Max
+          - ipq60xx_immwrt_Ultra
+          - ipq60xx_openwrt_Pro
+          - ipq60xx_openwrt_Max
+          - ipq60xx_openwrt_Ultra
+          - ipq60xx_libwrt_Pro
+          - ipq60xx_libwrt_Max
+          - ipq60xx_libwrt_Ultra

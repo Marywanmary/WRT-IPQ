@@ -27,7 +27,7 @@ jobs:
         ]
     
     steps:
-    - name: Check Server Performance(检查服务器性能)
+    - name: 检查服务器性能
       run: |
         echo "警告⚠"
         echo "分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
@@ -41,7 +41,7 @@ jobs:
         echo "--------------------------硬盘信息--------------------------"
         echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
 
-    - name: Initialization Environment(初始化环境)
+    - name: 初始化环境
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
@@ -50,10 +50,10 @@ jobs:
         sudo -E systemctl daemon-reload
         sudo timedatectl set-timezone "$TZ"
 
-    - name: Checkout(检出代码)
+    - name: 检出代码
       uses: actions/checkout@main
 
-    - name: Set Environment Variables(设置环境变量)
+    - name: 设置环境变量
       run: |
         # 解析设备model
         CHIP=$(echo "${{ matrix.device }}" | cut -d'_' -f1)
@@ -76,13 +76,13 @@ jobs:
             ;;
         esac
         
-        # 设置配置文件
-        GENERAL_CONFIG_FILE="configs/General.config"
-        CONFIG_TYPE_FILE="configs/${CONFIG_TYPE}.config"
+        # 设置配置文件路径（修改为deconfig/）
+        GENERAL_CONFIG_FILE="deconfig/General.config"
+        CONFIG_TYPE_FILE="deconfig/${CONFIG_TYPE}.config"
         
         # 如果是libwrt，添加额外的配置文件
         if [ "$BRANCH_ABBR" = "libwrt" ]; then
-          LIBWRT_CONFIG_FILE="configs/libwrt.config"
+          LIBWRT_CONFIG_FILE="deconfig/libwrt.config"
           echo "LIBWRT_CONFIG_FILE=$LIBWRT_CONFIG_FILE" >> $GITHUB_ENV
         fi
         
@@ -94,13 +94,13 @@ jobs:
         echo "REPO_BRANCH=$REPO_BRANCH" >> $GITHUB_ENV
         echo "GENERAL_CONFIG_FILE=$GENERAL_CONFIG_FILE" >> $GITHUB_ENV
         echo "CONFIG_TYPE_FILE=$CONFIG_TYPE_FILE" >> $GITHUB_ENV
-        echo "DIY_SCRIPT=scripts/Roc-script.sh" >> $GITHUB_ENV
+        echo "DIY_SCRIPT=scripts/script.sh" >> $GITHUB_ENV  # 修改DIY_SCRIPT路径
         echo "CLASH_KERNEL=amd64" >> $GITHUB_ENV
         echo "UPLOAD_BIN_DIR=false" >> $GITHUB_ENV
         echo "FIRMWARE_RELEASE=false" >> $GITHUB_ENV  # 设置为false，因为最后会统一发布
         echo "FIRMWARE_TAG=${{ matrix.device }}" >> $GITHUB_ENV
 
-    - name: Clone Source Code(克隆源代码)
+    - name: 克隆源代码
       run: |
         df -hT $GITHUB_WORKSPACE
         sudo mkdir -p /mnt/openwrt
@@ -113,9 +113,9 @@ jobs:
         VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12)
         echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
 
-    - name: Generate Variables(生成变量)
+    - name: 生成变量
       run: |
-        # 合并配置文件
+        # 合并配置文件（使用deconfig/路径）
         if [ -n "$LIBWRT_CONFIG_FILE" ]; then
           cat $GENERAL_CONFIG_FILE $CONFIG_TYPE_FILE $LIBWRT_CONFIG_FILE > $OPENWRT_PATH/.config
         else
@@ -133,16 +133,17 @@ jobs:
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
         echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
 
-    - name: Cache Toolchain(缓存工具链)
+    - name: 缓存工具链
       uses: actions/cache@main
       with:
-        key: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
-        restore-keys: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
+        # 修改缓存键生成规则
+        key: ${{ env.DEVICE_TARGET }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
+        restore-keys: ${{ env.DEVICE_TARGET }}-${{ env.HASH }}-
         path: |
           ${{ env.OPENWRT_PATH }}/.ccache
           ${{ env.OPENWRT_PATH }}/staging_dir
 
-    - name: Refresh The Cache(刷新缓存)
+    - name: 刷新缓存
       run: |
         if [ -d "$OPENWRT_PATH/staging_dir" ]; then
           find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
@@ -150,21 +151,21 @@ jobs:
           done
         fi
 
-    - name: Install Feeds(安装feeds)
+    - name: 安装feeds
       run: |
         cd $OPENWRT_PATH
         ./scripts/feeds update -a
         ./scripts/feeds install -a
   
-    - name: Load Custom Configuration(加载自定义配置)
+    - name: 加载自定义配置
       run: |
         chmod +x $DIY_SCRIPT
         cd $OPENWRT_PATH
         $GITHUB_WORKSPACE/$DIY_SCRIPT
 
-    - name: Download DL Package(下载DL软件包)
+    - name: 下载DL软件包
       run: |
-        # 重新合并配置文件，确保使用最新的配置
+        # 重新合并配置文件，确保使用最新的配置（使用deconfig/路径）
         if [ -n "$LIBWRT_CONFIG_FILE" ]; then
           cat $GENERAL_CONFIG_FILE $CONFIG_TYPE_FILE $LIBWRT_CONFIG_FILE > $OPENWRT_PATH/.config
         else
@@ -175,7 +176,7 @@ jobs:
         make defconfig
         make download -j$(nproc)
 
-    - name: Compile Firmware(开始编译固件)
+    - name: 编译固件
       id: compile
       run: |
         cd $OPENWRT_PATH
@@ -185,11 +186,11 @@ jobs:
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
 
-    - name: Check Space Usage(检查空间使用情况)
+    - name: 检查空间使用情况
       if: (!cancelled())
       run: df -hT
 
-    - name: Organize Files(整理文件)
+    - name: 整理文件
       if: steps.compile.outputs.status == 'success'
       run: |
         cd $OPENWRT_PATH/bin/targets/*/*
@@ -209,84 +210,4 @@ jobs:
         
         # 复制并打包Packages
         mkdir -p packages
-        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages 2>/dev/null || true
-        tar -zcf $OUTPUT_DIR/${{ env.CHIP }}-${{ env.BRANCH_ABBR }}-${{ env.CONFIG_TYPE }}.Packages.tar.gz packages
-        
-        # 重命名固件文件
-        for file in *.bin; do
-          # 提取固件型号和模式
-          if [[ $file =~ (immortalwrt|libwrt)-qualcommax-ipq60xx-(jdcloud_[a-z]{2}-[0-9]{2})-squashfs-(factory|sysupgrade).bin ]]; then
-            FIRMWARE_MODEL=${BASH_REMATCH[2]}
-            FIRMWARE_MODE=${BASH_REMATCH[3]}
-            NEW_NAME="${{ env.BRANCH_ABBR }}-${FIRMWARE_MODEL}-${FIRMWARE_MODE}-${{ env.CONFIG_TYPE }}.bin"
-            mv "$file" "$OUTPUT_DIR/$NEW_NAME"
-          fi
-        done
-        
-        echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
-
-    - name: Upload Firmware To Artifact(将固件上传到Artifact)
-      if: steps.compile.outputs.status == 'success'
-      uses: actions/upload-artifact@main
-      with:
-        name: ${{ matrix.device }}-firmware
-        path: ${{ env.OUTPUT_DIR }}
-
-    - name: Delete Old Cache(删除旧缓存)
-      run: |
-        # 获取缓存列表并删除
-        gh cache list --key ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key --jq '.[] | .key' | while read -r key; do
-          gh cache delete "$key"
-        done
-        # 输出缓存状态
-        echo "========cache status========"
-        echo "ccache: $(du -sh $OPENWRT_PATH/.ccache | cut -f 1)"
-        echo "staging: $(du -sh $OPENWRT_PATH/staging_dir | cut -f 1)"
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  Release:
-    needs: Build
-    runs-on: ubuntu-22.04
-    steps:
-    - name: Checkout(检出代码)
-      uses: actions/checkout@main
-
-    - name: Set Release Date(设置发布日期)
-      run: echo "RELEASE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-
-    - name: Download All Artifacts(下载所有产出物)
-      uses: actions/download-artifact@main
-      with:
-        path: artifacts
-
-    - name: Organize Release Files(整理发布文件)
-      run: |
-        mkdir -p release
-        for device_dir in artifacts/*; do
-          if [ -d "$device_dir" ]; then
-            device_name=$(basename "$device_dir")
-            mkdir -p "release/$device_name"
-            cp -r "$device_dir"/* "release/$device_name/"
-          fi
-        done
-
-    - name: Upload Firmware To Release(发布固件)
-      uses: ncipollo/release-action@main
-      with:
-        name: ${{ env.RELEASE_DATE }} for IQP60XX
-        allowUpdates: true
-        tag: IQP60XX
-        token: ${{ secrets.GITHUB_TOKEN }}
-        artifacts: release/*
-        body: |
-          **This is OpenWrt Firmware for IQP60XX**
-          ### 📒 固件信息
-          - 这是开启全功能NSS的6.12内核固件，默认主题为Argon；该固件在ImmortalWrt的基础上，添加了额外的软件包cpufreq、ddns、ttyd、upnp、wolplus、samba4、vlmcsd、aria2、autoreboot、uhttpd、wifischedule、frps、frpc、diskman、hd-idle、banip、acme、arpbind、usb-printer、homeproxy、openlist、adguardhome、oaf、sqm、wireguard、watchcat、3cat（**Taiyi**额外增加了filebrowser、dockerman、gecoosac、lucky），并添加了若干工具，具体详见对应机型的config。
-          - 💻 这是 IQP60XX 平台使用的 OpenWrt 固件
-          - ⚽ 固件源码: https://github.com/laipeng668/immortalwrt.git 或 https://github.com/laipeng668/openwrt.git
-          - 💝 源码分支: master 或 k6.12-nss
-          - 🌐 默认地址: **192.168.2.1**
-          - 🔑 默认密码: none
-          ### 🧊 固件版本
-          - 固件内核版本：**6.12**
+        mv -f $OPENWRT_PATH/bin/packages

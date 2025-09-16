@@ -4,34 +4,20 @@ on:
   workflow_call:
   schedule:
     - cron: '0 20 * * 4'
-
 env:
-  # 通用环境变量
+  # 移除了多余的全局变量 REPO_URL, REPO_BRANCH, CONFIG_FILE
   GENERAL_CONFIG_FILE: deconfig/General.config
-  DIY_SCRIPT: scripts/Roc-script.sh
+  DIY_SCRIPT: scripts/script.sh # 根据用户确认修改
   CLASH_KERNEL: amd64
   UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true
-  FIRMWARE_TAG: IPQ60XX-Builds
+  FIRMWARE_TAG: IPQ60XX-Builds # 根据需求修改标签
   TZ: Asia/Shanghai
-  # 定义所有需要编译的设备模型
-  MODELS: |
-    ipq60xx_immwrt_Pro
-    ipq60xx_immwrt_Max
-    ipq60xx_immwrt_Ultra
-    ipq60xx_openwrt_Pro
-    ipq60xx_openwrt_Max
-    ipq60xx_openwrt_Ultra
-    ipq60xx_libwrt_Pro
-    ipq60xx_libwrt_Max
-    ipq60xx_libwrt_Ultra
-
 jobs:
   Build:
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        # 使用更简单的数组定义方式
         model: [
           "ipq60xx_immwrt_Pro",
           "ipq60xx_immwrt_Max", 
@@ -57,7 +43,6 @@ jobs:
         echo -e "$(sudo lshw -short -C memory | grep GiB)"
         echo "--------------------------硬盘信息--------------------------"
         echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
-
     - name: Initialization Environment(初始化环境)
       env:
         DEBIAN_FRONTEND: noninteractive
@@ -66,10 +51,8 @@ jobs:
         sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
         sudo -E systemctl daemon-reload
         sudo timedatectl set-timezone "$TZ"
-
     - name: Checkout(检出代码)
       uses: actions/checkout@main
-
     - name: Parse Model Info(解析模型信息)
       id: parse_model
       run: |
@@ -149,12 +132,31 @@ jobs:
         echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
         VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12)
         echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
-
     - name: Generate Variables(生成变量)
       run: |
         cd $OPENWRT_PATH
-        # 使用最终配置文件
-        cat ${{ env.FINAL_CONFIG_FILE }} > .config
+        # Debug: Print current directory and check files
+        echo "Current directory: $(pwd)"
+        echo "Checking for config files:"
+        echo "GENERAL_CONFIG_FILE ($GENERAL_CONFIG_FILE): $(ls -la $GENERAL_CONFIG_FILE 2>/dev/null || echo 'NOT FOUND')"
+        echo "CONFIG_FILE ($CONFIG_FILE): $(ls -la $CONFIG_FILE 2>/dev/null || echo 'NOT FOUND')"
+        echo "FINAL_CONFIG_FILE: $FINAL_CONFIG_FILE"
+        
+        # 检查文件是否存在
+        if [ ! -f "$GENERAL_CONFIG_FILE" ]; then
+          echo "ERROR: General config file $GENERAL_CONFIG_FILE does not exist!"
+          exit 1
+        fi
+        if [ ! -f "$CONFIG_FILE" ]; then
+          echo "ERROR: Device-specific config file $CONFIG_FILE does not exist!"
+          exit 1
+        fi
+        
+        # 使用动态设置的 FINAL_CONFIG_FILE
+        echo "Concatenating config files..."
+        cat $FINAL_CONFIG_FILE > .config
+        echo "Config file created successfully."
+
         make defconfig > /dev/null 2>&1
         SOURCE_REPO="$(echo ${{ env.REPO_URL }} | awk -F '/' '{print $(NF)}')"
         echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
@@ -164,7 +166,6 @@ jobs:
         echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
         echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-
     - name: Cache Toolchain(缓存工具链)
       uses: actions/cache@main
       with:
@@ -173,7 +174,6 @@ jobs:
         path: |
           ${{ env.OPENWRT_PATH }}/.ccache
           ${{ env.OPENWRT_PATH }}/staging_dir
-
     - name: Refresh The Cache(刷新缓存)
       run: |
         if [ -d "$OPENWRT_PATH/staging_dir" ]; then
@@ -181,25 +181,23 @@ jobs:
               find "$dir" -type f -exec touch {} +
           done
         fi
-
     - name: Install Feeds(安装feeds)
       run: |
         cd $OPENWRT_PATH
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-
     - name: Load Custom Configuration(加载自定义配置)
       run: |
         chmod +x ${{ env.DIY_SCRIPT }}
         cd $OPENWRT_PATH
         $GITHUB_WORKSPACE/${{ env.DIY_SCRIPT }}
-
     - name: Download DL Package(下载DL软件包)
       run: |
         cd $OPENWRT_PATH
+        # 使用动态生成的 FINAL_CONFIG_FILE 而不是静态的 CONFIG_FILE
+        cat $FINAL_CONFIG_FILE > .config
         make defconfig
         make download -j$(nproc)
-
     - name: Compile Firmware(开始编译固件)
       id: compile
       run: |
@@ -209,11 +207,9 @@ jobs:
         echo "status=success" >> $GITHUB_OUTPUT
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
-
     - name: Check Space Usage(检查空间使用情况)
       if: (!cancelled())
       run: df -hT
-
     - name: Organize Files(整理文件)
       if: steps.compile.outputs.status == 'success'
       run: |

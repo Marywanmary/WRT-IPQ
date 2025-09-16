@@ -109,10 +109,22 @@ if [[ -d $TARGET_DIR ]]; then
     find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi.img.gz" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*rootfs.tar.gz" -o -name ".config" -o -name "config.buildinfo" -o -name "Packages.manifest" \) -exec rm -f {} +
 fi
 
+# # 下载编译所需的源代码包
+# make download -j$(($(nproc) * 2))
+# # 开始编译固件
+# make -j$(($(nproc) + 1)) || make -j1 V=s
+
 # 下载编译所需的源代码包
-make download -j$(($(nproc) * 2))
+echo "开始下载依赖包..."
+make download -j1 V=s
+# 清理缓存（可选）
+echo "清理构建缓存..."
+make clean
+make dirclean
 # 开始编译固件
-make -j$(($(nproc) + 1)) || make -j1 V=s
+echo "开始编译固件..."
+make -j1 V=s
+
 
 # 创建临时目录用于存放所有产出物
 TEMP_DIR="$BASE_PATH/temp_firmware"

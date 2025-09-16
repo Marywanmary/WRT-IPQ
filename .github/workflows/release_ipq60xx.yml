@@ -85,7 +85,11 @@ jobs:
 
       # 步骤6.5：加载自定义配置
       - name: Load Custom Configuration
-        run: ./scripts/script.sh ${{ matrix.model }}
+        # run: ./scripts/script.sh ${{ matrix.model }}
+        run: | 
+         cd ./action_build
+         # chmod +x ../scripts/script.sh
+         ../scripts/script.sh
       
       # 步骤7：缓存依赖项
       - name: Cache Dependencies

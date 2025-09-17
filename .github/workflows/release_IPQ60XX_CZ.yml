@@ -19,10 +19,15 @@ env:
     immwrt|https://github.com/laipeng668/immortalwrt.git|master|immwrt
     openwrt|https://github.com/laipeng668/openwrt.git|master|openwrt
     libwrt|https://github.com/laipeng668/immortalwrt.git|k6.12-nss|libwrt
+  # 修改配置文件路径为deconfig目录
   CONFIG_MAP: |
-    Pro|configs/Pro.config
-    Max|configs/Max.config
-    Ultra|configs/Ultra.config
+    Pro|deconfig/Pro.config
+    Max|deconfig/Max.config
+    Ultra|deconfig/Ultra.config
+  # 基础配置文件路径
+  GENERAL_CONFIG: "deconfig/General.config"
+  BASE_CONFIG: "deconfig/IPQ60XX.config"
+  LIBWRT_CONFIG: "deconfig/Libwrt.config"
 
 jobs:
   Build:
@@ -89,14 +94,12 @@ jobs:
         CONFIG_LINE=$(echo "${{ env.CONFIG_MAP }}" | grep "^$CONFIG_TYPE|")
         CONFIG_FILE=$(echo "$CONFIG_LINE" | cut -d'|' -f2)
         
-        # 设置配置文件组合
-        GENERAL_CONFIG_FILE="configs/General.config"
-        BASE_CONFIG_FILE="configs/IPQ60XX.config"
-        CONFIG_FILES="$GENERAL_CONFIG_FILE $BASE_CONFIG_FILE $CONFIG_FILE"
+        # 设置配置文件组合 - 使用环境变量中的路径
+        CONFIG_FILES="${{ env.GENERAL_CONFIG }} ${{ env.BASE_CONFIG }} $CONFIG_FILE"
         
         # 如果是libwrt分支，添加Libwrt.config
         if [ "$BRANCH_ABBR" = "libwrt" ]; then
-          CONFIG_FILES="$CONFIG_FILES configs/Libwrt.config"
+          CONFIG_FILES="$CONFIG_FILES ${{ env.LIBWRT_CONFIG }}"
         fi
         
         # 设置其他变量

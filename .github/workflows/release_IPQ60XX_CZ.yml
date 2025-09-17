@@ -14,14 +14,15 @@ env:
   KERNEL_VERSION: "6.12"
   DEFAULT_IP: "192.168.2.1"
   DEFAULT_PASSWORD: "none"
+  # 使用|作为分隔符，避免与URL中的冒号冲突
   REPO_MAP: |
-    immwrt:https://github.com/laipeng668/immortalwrt.git:master:immwrt
-    openwrt:https://github.com/laipeng668/openwrt.git:master:openwrt
-    libwrt:https://github.com/laipeng668/immortalwrt.git:k6.12-nss:libwrt
+    immwrt|https://github.com/laipeng668/immortalwrt.git|master|immwrt
+    openwrt|https://github.com/laipeng668/openwrt.git|master|openwrt
+    libwrt|https://github.com/laipeng668/immortalwrt.git|k6.12-nss|libwrt
   CONFIG_MAP: |
-    Pro:configs/Pro.config
-    Max:configs/Max.config
-    Ultra:configs/Ultra.config
+    Pro|configs/Pro.config
+    Max|configs/Max.config
+    Ultra|configs/Ultra.config
 
 jobs:
   Build:
@@ -78,14 +79,15 @@ jobs:
         BRANCH_ABBR=$(echo "${{ matrix.device }}" | cut -d'_' -f2)
         CONFIG_TYPE=$(echo "${{ matrix.device }}" | cut -d'_' -f3)
         
-        # 获取仓库信息
-        REPO_INFO=$(echo "${{ env.REPO_MAP }}" | grep "^$BRANCH_ABBR:" | cut -d':' -f2-)
-        REPO_URL=$(echo "$REPO_INFO" | cut -d':' -f1)
-        REPO_BRANCH=$(echo "$REPO_INFO" | cut -d':' -f2)
-        BRANCH_PREFIX=$(echo "$REPO_INFO" | cut -d':' -f3)
+        # 获取仓库信息 - 使用|作为分隔符
+        REPO_LINE=$(echo "${{ env.REPO_MAP }}" | grep "^$BRANCH_ABBR|")
+        REPO_URL=$(echo "$REPO_LINE" | cut -d'|' -f2)
+        REPO_BRANCH=$(echo "$REPO_LINE" | cut -d'|' -f3)
+        BRANCH_PREFIX=$(echo "$REPO_LINE" | cut -d'|' -f4)
         
-        # 获取配置文件
-        CONFIG_FILE=$(echo "${{ env.CONFIG_MAP }}" | grep "^$CONFIG_TYPE:" | cut -d':' -f2)
+        # 获取配置文件 - 使用|作为分隔符
+        CONFIG_LINE=$(echo "${{ env.CONFIG_MAP }}" | grep "^$CONFIG_TYPE|")
+        CONFIG_FILE=$(echo "$CONFIG_LINE" | cut -d'|' -f2)
         
         # 设置配置文件组合
         GENERAL_CONFIG_FILE="configs/General.config"
@@ -118,7 +120,7 @@ jobs:
         df -hT $GITHUB_WORKSPACE
         sudo mkdir -p /mnt/openwrt
         sudo chown -R $(id -u):$(id -g) /mnt/openwrt
-        git clone --depth 1 -b ${{ steps.parse.outputs.REPO_BRANCH }} --single-branch ${{ steps.parse.outputs.REPO_URL }} /mnt/openwrt
+        git clone --depth 1 -b "${{ steps.parse.outputs.REPO_BRANCH }}" --single-branch "${{ steps.parse.outputs.REPO_URL }}" /mnt/openwrt
         cd /mnt/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
         VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")

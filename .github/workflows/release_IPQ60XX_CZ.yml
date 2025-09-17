@@ -18,7 +18,7 @@ env:
   REPO_MAP: |
     immwrt|https://github.com/laipeng668/immortalwrt.git|master|immwrt
     openwrt|https://github.com/laipeng668/openwrt.git|master|openwrt
-    libwrt|https://github.com/laipeng668/immortalwrt.git|k6.12-nss|libwrt
+    libwrt|https://github.com/laipeng668/openwrt-6.x.git|k6.12-nss|libwrt
   # 修改配置文件路径为deconfig目录
   CONFIG_MAP: |
     Pro|deconfig/Pro.config
@@ -318,8 +318,10 @@ jobs:
           ### 📒 固件信息
           - 这是开启全功能NSS的${{ env.KERNEL_VERSION }}内核固件，默认主题为Argon；该固件在ImmortalWrt的基础上，添加了额外的软件包cpufreq、ddns、ttyd、upnp、wolplus、samba4、vlmcsd、aria2、autoreboot、uhttpd、wifischedule、frps、frpc、diskman、hd-idle、banip、acme、arpbind、usb-printer、homeproxy、openlist、adguardhome、oaf、sqm、wireguard、watchcat、3cat（**Taiyi**额外增加了filebrowser、dockerman、gecoosac、lucky），并添加了若干工具，具体详见对应机型的config。
           - 💻 这是 IPQ60XX 平台使用的 OpenWrt 固件
-          - ⚽ 固件源码: https://github.com/laipeng668/immortalwrt.git 或 https://github.com/laipeng668/openwrt.git
-          - 💝 源码分支: master 或 k6.12-nss
+          - ⚽ 固件源码: 
+            - immwrt: https://github.com/laipeng668/immortalwrt.git (master)
+            - openwrt: https://github.com/laipeng668/openwrt.git (master)
+            - libwrt: https://github.com/laipeng668/openwrt-6.x.git (k6.12-nss)
           - 🌐 默认地址: **${{ env.DEFAULT_IP }}**
           - 🔑 默认密码: ${{ env.DEFAULT_PASSWORD }}
           ### 🧊 固件版本

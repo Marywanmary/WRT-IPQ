@@ -1,0 +1,332 @@
+name: Release-IPQ60XX-CZ
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: 0 16 * * 4
+
+env:
+  TZ: Asia/Shanghai
+  FIRMWARE_PATTERN: "qualcommax-ipq60xx"
+  MANIFEST_FILE: "*.manifest"
+  APK_PATTERN: "*.apk"
+  KERNEL_VERSION: "6.12"
+  DEFAULT_IP: "192.168.2.1"
+  DEFAULT_PASSWORD: "none"
+  REPO_MAP: |
+    immwrt:https://github.com/laipeng668/immortalwrt.git:master:immwrt
+    openwrt:https://github.com/laipeng668/openwrt.git:master:openwrt
+    libwrt:https://github.com/laipeng668/immortalwrt.git:k6.12-nss:libwrt
+  CONFIG_MAP: |
+    Pro:configs/Pro.config
+    Max:configs/Max.config
+    Ultra:configs/Ultra.config
+
+jobs:
+  Build:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        device: [
+          "ipq60xx_immwrt_Pro",
+          "ipq60xx_immwrt_Max", 
+          "ipq60xx_immwrt_Ultra",
+          "ipq60xx_openwrt_Pro",
+          "ipq60xx_openwrt_Max",
+          "ipq60xx_openwrt_Ultra",
+          "ipq60xx_libwrt_Pro",
+          "ipq60xx_libwrt_Max",
+          "ipq60xx_libwrt_Ultra"
+        ]
+
+    steps:
+    - name: Checkout(检出代码)
+      uses: actions/checkout@main
+
+    - name: Initialization Environment(初始化环境)
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        set -euxo pipefail
+        sudo -E apt-get -y update
+        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
+        sudo -E systemctl daemon-reload
+        sudo timedatectl set-timezone "$TZ"
+
+    - name: Check Server Performance(检查服务器性能)
+      run: |
+        echo "警告⚠"
+        echo "分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
+        echo -e "已知CPU型号（降序）：7763，8370C，8272CL，8171M，E5-2673"
+        echo "--------------------------CPU信息--------------------------"
+        echo "CPU物理数量：$(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
+        echo -e "CPU核心信息：$(cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c)"
+        echo "--------------------------内存信息--------------------------"
+        echo "已安装内存详细信息："
+        echo -e "$(sudo lshw -short -C memory | grep GiB)"
+        echo "--------------------------硬盘信息--------------------------"
+        echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+
+    - name: Parse Device Info(解析设备信息)
+      id: parse
+      run: |
+        set -euxo pipefail
+        
+        # 解析设备名称
+        CHIP=$(echo "${{ matrix.device }}" | cut -d'_' -f1)
+        BRANCH_ABBR=$(echo "${{ matrix.device }}" | cut -d'_' -f2)
+        CONFIG_TYPE=$(echo "${{ matrix.device }}" | cut -d'_' -f3)
+        
+        # 获取仓库信息
+        REPO_INFO=$(echo "${{ env.REPO_MAP }}" | grep "^$BRANCH_ABBR:" | cut -d':' -f2-)
+        REPO_URL=$(echo "$REPO_INFO" | cut -d':' -f1)
+        REPO_BRANCH=$(echo "$REPO_INFO" | cut -d':' -f2)
+        BRANCH_PREFIX=$(echo "$REPO_INFO" | cut -d':' -f3)
+        
+        # 获取配置文件
+        CONFIG_FILE=$(echo "${{ env.CONFIG_MAP }}" | grep "^$CONFIG_TYPE:" | cut -d':' -f2)
+        
+        # 设置配置文件组合
+        GENERAL_CONFIG_FILE="configs/General.config"
+        BASE_CONFIG_FILE="configs/IPQ60XX.config"
+        CONFIG_FILES="$GENERAL_CONFIG_FILE $BASE_CONFIG_FILE $CONFIG_FILE"
+        
+        # 如果是libwrt分支，添加Libwrt.config
+        if [ "$BRANCH_ABBR" = "libwrt" ]; then
+          CONFIG_FILES="$CONFIG_FILES configs/Libwrt.config"
+        fi
+        
+        # 设置其他变量
+        DEVICE_PREFIX="${CHIP}-${BRANCH_ABBR}-${CONFIG_TYPE}"
+        FIRMWARE_TAG="IPQ60XX-${{ matrix.device }}"
+        
+        # 输出变量
+        echo "CHIP=$CHIP" >> $GITHUB_OUTPUT
+        echo "BRANCH_ABBR=$BRANCH_ABBR" >> $GITHUB_OUTPUT
+        echo "CONFIG_TYPE=$CONFIG_TYPE" >> $GITHUB_OUTPUT
+        echo "REPO_URL=$REPO_URL" >> $GITHUB_OUTPUT
+        echo "REPO_BRANCH=$REPO_BRANCH" >> $GITHUB_OUTPUT
+        echo "BRANCH_PREFIX=$BRANCH_PREFIX" >> $GITHUB_OUTPUT
+        echo "CONFIG_FILES=$CONFIG_FILES" >> $GITHUB_OUTPUT
+        echo "DEVICE_PREFIX=$DEVICE_PREFIX" >> $GITHUB_OUTPUT
+        echo "FIRMWARE_TAG=$FIRMWARE_TAG" >> $GITHUB_OUTPUT
+
+    - name: Clone Source Code(克隆源代码)
+      run: |
+        set -euxo pipefail
+        df -hT $GITHUB_WORKSPACE
+        sudo mkdir -p /mnt/openwrt
+        sudo chown -R $(id -u):$(id -g) /mnt/openwrt
+        git clone --depth 1 -b ${{ steps.parse.outputs.REPO_BRANCH }} --single-branch ${{ steps.parse.outputs.REPO_URL }} /mnt/openwrt
+        cd /mnt/openwrt
+        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+        VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
+        echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
+        VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-${{ env.KERNEL_VERSION }})
+        echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
+
+    - name: Generate Variables(生成变量)
+      run: |
+        set -euxo pipefail
+        # 合并配置文件
+        cat ${{ steps.parse.outputs.CONFIG_FILES }} > $OPENWRT_PATH/.config
+        cd $OPENWRT_PATH
+        make defconfig > /dev/null 2>&1
+        SOURCE_REPO="$(echo ${{ steps.parse.outputs.REPO_URL }} | awk -F '/' '{print $(NF)}')"
+        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
+        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
+        echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
+        echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+
+    - name: Cache Toolchain(缓存工具链)
+      uses: actions/cache@main
+      with:
+        key: ${{ env.SOURCE_REPO }}-${{ env.HASH }}-${{ matrix.device }} ${{ env.CACHE_DATE }}
+        restore-keys: |
+          ${{ env.SOURCE_REPO }}-${{ env.HASH }}-${{ matrix.device }}-
+          ${{ env.SOURCE_REPO }}-${{ env.HASH }}-
+          ${{ env.SOURCE_REPO }}-
+        path: |
+          ${{ env.OPENWRT_PATH }}/.ccache
+          ${{ env.OPENWRT_PATH }}/staging_dir
+
+    - name: Refresh The Cache(刷新缓存)
+      run: |
+        set -euxo pipefail
+        if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+          find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
+              find "$dir" -type f -exec touch {} +
+          done
+        fi
+
+    - name: Install Feeds(安装feeds)
+      run: |
+        set -euxo pipefail
+        cd $OPENWRT_PATH
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+  
+    - name: Load Custom Configuration(加载自定义配置)
+      run: |
+        set -euxo pipefail
+        chmod +x scripts/script.sh
+        cd $OPENWRT_PATH
+        $GITHUB_WORKSPACE/scripts/script.sh
+
+    - name: Download DL Package(下载DL软件包)
+      run: |
+        set -euxo pipefail
+        cat ${{ steps.parse.outputs.CONFIG_FILES }} > $OPENWRT_PATH/.config
+        cd $OPENWRT_PATH
+        make defconfig
+        make download -j$(nproc)
+
+    - name: Compile Firmware(开始编译固件)
+      id: compile
+      run: |
+        set -euxo pipefail
+        cd $OPENWRT_PATH
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+
+    - name: Check Space Usage(检查空间使用情况)
+      if: (!cancelled())
+      run: df -hT
+
+    - name: Organize Files(整理文件)
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        set -euxo pipefail
+        cd $OPENWRT_PATH/bin/targets/*/*
+        
+        # 创建输出目录
+        OUTPUT_DIR="$GITHUB_WORKSPACE/output_${{ matrix.device }}"
+        mkdir -p $OUTPUT_DIR
+        
+        # 复制并重命名配置文件
+        cp $OPENWRT_PATH/.config $OUTPUT_DIR/${{ steps.parse.outputs.DEVICE_PREFIX }}.config
+        cp config.buildinfo $OUTPUT_DIR/${{ steps.parse.outputs.DEVICE_PREFIX }}.config.buildinfo
+        
+        # 复制manifest文件
+        for manifest_file in ${{ env.MANIFEST_FILE }}; do
+          if [ -f "$manifest_file" ]; then
+            cp "$manifest_file" $OUTPUT_DIR/${{ steps.parse.outputs.DEVICE_PREFIX }}.manifest
+            break
+          fi
+        done
+        
+        # 重命名固件文件
+        for file in *.bin; do
+          # 跳过非目标文件
+          [[ "$file" =~ factory|sysupgrade ]] || continue
+          
+          # 提取固件模式
+          MODE=$(echo "$file" | grep -oE "factory|sysupgrade")
+          
+          # 提取固件型号
+          if [[ "$file" =~ ${{ env.FIRMWARE_PATTERN }}-([^-]+)-squashfs ]]; then
+            MODEL="${BASH_REMATCH[1]}"
+          else
+            MODEL="unknown-model"
+          fi
+          
+          # 新文件名格式: 分支缩写-固件型号-固件模式-配置.bin
+          NEW_FILE="${{ steps.parse.outputs.BRANCH_PREFIX }}-${MODEL}-${MODE}-${{ steps.parse.outputs.CONFIG_TYPE }}.bin"
+          cp "$file" "$OUTPUT_DIR/$NEW_FILE"
+        done
+        
+        # 复制并打包软件包
+        mkdir -p $OUTPUT_DIR/packages
+        find $OPENWRT_PATH/bin/packages -name "${{ env.APK_PATTERN }}" -exec cp {} $OUTPUT_DIR/packages/ \;
+        cd $OUTPUT_DIR
+        tar -zcf ${{ steps.parse.outputs.DEVICE_PREFIX }}.Packages.tar.gz packages
+        
+        echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
+
+    - name: Upload Firmware To Artifact(将固件上传到Artifact)
+      if: steps.compile.outputs.status == 'success'
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ env.SOURCE_REPO }}-firmware-${{ matrix.device }}-${{ env.FILE_DATE }}
+        path: ${{ env.OUTPUT_DIR }}
+
+    - name: Delete Old Cache(删除旧缓存)
+      run: |
+        set -euxo pipefail
+        # 获取缓存列表并删除
+        gh cache list --key ${{ env.SOURCE_REPO }}-${{ env.HASH }}-${{ matrix.device }} --json key --jq '.[] | .key' | while read -r key; do
+          gh cache delete "$key"
+        done
+        # 输出缓存状态
+        echo "========cache status========"
+        echo "ccache: $(du -sh $OPENWRT_PATH/.ccache | cut -f 1)"
+        echo "staging: $(du -sh $OPENWRT_PATH/staging_dir | cut -f 1)"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  Release:
+    needs: Build
+    runs-on: ubuntu-22.04
+    if: always()
+    
+    steps:
+    - name: Checkout(检出代码)
+      uses: actions/checkout@main
+
+    - name: Download All Artifacts(下载所有构建产物)
+      uses: actions/download-artifact@main
+      with:
+        path: artifacts
+
+    - name: Organize Release Files(整理发布文件)
+      run: |
+        set -euxo pipefail
+        mkdir -p release_files
+        cd artifacts
+        
+        # 遍历所有设备目录
+        for device_dir in */; do
+          [ -d "$device_dir" ] && cp -r "$device_dir"* ../release_files/
+        done
+        
+        cd ..
+        echo "RELEASE_PATH=$(pwd)/release_files" >> $GITHUB_ENV
+        echo "RELEASE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+
+    - name: Upload Firmware To Release(发布固件)
+      uses: ncipollo/release-action@main
+      with:
+        name: ${{ env.RELEASE_DATE }} for IPQ60XX-Multi
+        allowUpdates: true
+        tag: IPQ60XX-Multi
+        token: ${{ secrets.GITHUB_TOKEN }}
+        artifacts: ${{ env.RELEASE_PATH }}/*
+        body: |
+          **This is OpenWrt Firmware for IPQ60XX Multi-Devices**
+          ### 📒 固件信息
+          - 这是开启全功能NSS的${{ env.KERNEL_VERSION }}内核固件，默认主题为Argon；该固件在ImmortalWrt的基础上，添加了额外的软件包cpufreq、ddns、ttyd、upnp、wolplus、samba4、vlmcsd、aria2、autoreboot、uhttpd、wifischedule、frps、frpc、diskman、hd-idle、banip、acme、arpbind、usb-printer、homeproxy、openlist、adguardhome、oaf、sqm、wireguard、watchcat、3cat（**Taiyi**额外增加了filebrowser、dockerman、gecoosac、lucky），并添加了若干工具，具体详见对应机型的config。
+          - 💻 这是 IPQ60XX 平台使用的 OpenWrt 固件
+          - ⚽ 固件源码: https://github.com/laipeng668/immortalwrt.git 或 https://github.com/laipeng668/openwrt.git
+          - 💝 源码分支: master 或 k6.12-nss
+          - 🌐 默认地址: **${{ env.DEFAULT_IP }}**
+          - 🔑 默认密码: ${{ env.DEFAULT_PASSWORD }}
+          ### 🧊 固件版本
+          - 固件内核版本：**${{ env.KERNEL_VERSION }}**
+          - 包含设备: 
+            - ipq60xx_immwrt_Pro/Max/Ultra
+            - ipq60xx_openwrt_Pro/Max/Ultra
+            - ipq60xx_libwrt_Pro/Max/Ultra
+          - 固件命名规则: 分支缩写-固件型号-固件模式-配置.bin
+          ### 📦 文件说明
+          - 固件文件: 分支缩写-固件型号-固件模式-配置.bin
+          - 配置文件: ipq60xx-分支缩写-配置类型.config
+          - 构建信息: ipq60xx-分支缩写-配置类型.config.buildinfo
+          - 软件包清单: ipq60xx-分支缩写-配置类型.manifest
+          - 软件包归档: ipq60xx-分支缩写-配置类型.Packages.tar.gz

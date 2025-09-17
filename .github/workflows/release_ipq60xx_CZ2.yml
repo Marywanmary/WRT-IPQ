@@ -308,9 +308,17 @@ jobs:
         cd ..
         echo "RELEASE_PATH=$(pwd)/release_files" >> $GITHUB_ENV
         echo "RELEASE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        # 获取CHIP变量，用于Release标签
-        CHIP=$(echo "${{ matrix.device }}" | cut -d'_' -f1 | head -1)
-        echo "CHIP=$CHIP" >> $GITHUB_ENV
+        
+        # 从构建产物中提取芯片名称
+        # 查找任何包含芯片名称的文件（如配置文件）
+        if ls release_files/*.config >/dev/null 2>&1; then
+          # 从第一个配置文件名中提取芯片名称
+          CHIP=$(ls release_files/*.config | head -n1 | xargs basename | cut -d'_' -f1)
+          echo "CHIP=$CHIP" >> $GITHUB_ENV
+        else
+          # 如果没有找到配置文件，使用默认值
+          echo "CHIP=ipq60xx" >> $GITHUB_ENV
+        fi
 
     - name: Upload Firmware To Release(发布固件)
       uses: ncipollo/release-action@main
@@ -329,7 +337,7 @@ jobs:
             - immwrt: https://github.com/laipeng668/immortalwrt.git (master)
             - openwrt: https://github.com/laipeng668/openwrt.git (master)
             - libwrt: https://github.com/laipeng668/openwrt-6.x.git (k6.12-nss)
-          - 🌐 默认地址: **192.168.2.1**
+          - 🌐 默认地址: **192.168.111.1**
           - 🔑 默认密码: none
           ### 🧊 固件版本
           - 固件内核版本：根据各仓库源码确定

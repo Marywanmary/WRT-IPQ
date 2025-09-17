@@ -6,12 +6,14 @@ on:
     - cron: 0 16 * * 4
 env:
   # 通用配置
-  GENERAL_CONFIG_FILE: configs/General.config
-  BASE_CONFIG_FILE: configs/IPQ60XX.config
-  PRO_CONFIG_FILE: configs/Pro.config
-  MAX_CONFIG_FILE: configs/Max.config
-  ULTRA_CONFIG_FILE: configs/Ultra.config
-  LIBWRT_CONFIG_FILE: configs/Libwrt.config
+  REPO_URL: https://github.com/laipeng668/immortalwrt.git
+  REPO_BRANCH: master
+  GENERAL_CONFIG_FILE: deconfig/General.config
+  BASE_CONFIG_FILE: deconfig/IPQ60XX.config
+  PRO_CONFIG_FILE: deconfig/Pro.config
+  MAX_CONFIG_FILE: deconfig/Max.config
+  ULTRA_CONFIG_FILE: deconfig/Ultra.config
+  LIBWRT_CONFIG_FILE: deconfig/Libwrt.config
   DIY_SCRIPT: scripts/script.sh
   CLASH_KERNEL: amd64
   UPLOAD_BIN_DIR: false
@@ -78,7 +80,7 @@ jobs:
           df -hT $GITHUB_WORKSPACE
           sudo mkdir -p /mnt/openwrt
           sudo chown -R $(id -u):$(id -g) /mnt/openwrt
-          git clone --depth 1 -b master --single-branch https://github.com/laipeng668/immortalwrt.git /mnt/openwrt
+          git clone --depth 1 -b $REPO_BRANCH --single-branch $REPO_URL /mnt/openwrt
           cd /mnt/openwrt
           echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
           VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
@@ -96,10 +98,10 @@ jobs:
       - name: Cache Toolchain(缓存工具链)
         uses: actions/cache@main
         with:
-          key: immortalwrt-${{ env.HASH }} ${{ env.CACHE_DATE }}
+          key: ${{ env.SOURCE_REPO }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
           restore-keys: |
-            immortalwrt-${{ env.HASH }}-
-            immortalwrt-
+            ${{ env.SOURCE_REPO }}-${{ env.HASH }}-
+            ${{ env.SOURCE_REPO }}-
           path: |
             ${{ env.OPENWRT_PATH }}/.ccache
             ${{ env.OPENWRT_PATH }}/staging_dir
@@ -267,6 +269,9 @@ jobs:
               fi
 
               # 构造新的文件名
+              # 原始命名: immortalwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-factory.bin
+              # 新命名: immwrt-jdcloud_re-cs-02-factory-Pro.bin
+              # 即: BRANCH_ABBR-DEVICE_NAME-MODE-CONFIG_TYPE.bin
               NEW_NAME="${BRANCH_ABBR}-${DEVICE_NAME}-${MODE}-${CONFIG_TYPE}.bin"
               echo "Renaming $filename to $NEW_NAME"
               mv "$file" "$NEW_NAME"
@@ -293,9 +298,7 @@ jobs:
             # 上传 artifact
             ARTIFACT_NAME="${MODEL}-firmware-${DEVICE_TARGET}-${DEVICE_SUBTARGET}-$(date +"%Y.%m.%d")"
             echo "Uploading artifact: $ARTIFACT_NAME"
-            # 这里需要将当前目录的文件打包成 artifact
-            # 但因为这是一个单个 job，我们不能像之前那样并行上传
-            # 所以我们将所有文件都放到一个目录中，最后一起上传
+            # 为每个模型创建独立的 artifact
             mkdir -p "/tmp/artifacts/${ARTIFACT_NAME}"
             find . -type f -exec cp {} "/tmp/artifacts/${ARTIFACT_NAME}/" \;
 

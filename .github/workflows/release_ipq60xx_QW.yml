@@ -42,21 +42,10 @@ jobs:
           )
           echo "models=${MODELS[*]}" >> $GITHUB_OUTPUT
 
-  # --- 构建作业模板 ---
-  Build_Template:
+  # --- 主构建作业 ---
+  Build:
     needs: Preprocess
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        model: ${{ fromJSON(needs.Preprocess.outputs.models) }}
-    env:
-      # 从 model 名称中解析出芯片、分支缩写、配置类型
-      MODEL: ${{ matrix.model }}
-      # 使用 fromJson 和 substring 方法模拟 split
-      # 这里我们使用一个技巧：将字符串转换为 JSON 数组来模拟分割
-      # 但更简单的方式是直接在脚本中处理
-      # 我们将直接在 Generate Variables 步骤中处理这些逻辑
-
     steps:
       - name: Check Server Performance(检查服务器性能)
         run: |
@@ -89,26 +78,7 @@ jobs:
           df -hT $GITHUB_WORKSPACE
           sudo mkdir -p /mnt/openwrt
           sudo chown -R $(id -u):$(id -g) /mnt/openwrt
-          # 根据 model 名称动态设置 repo url 和 branch
-          MODEL="${{ matrix.model }}"
-          REPO_URL=""
-          REPO_BRANCH=""
-          
-          if [[ "$MODEL" == *"libwrt"* ]]; then
-            REPO_URL="https://github.com/laipeng668/immortalwrt.git"
-            REPO_BRANCH="k6.12-nss"
-          elif [[ "$MODEL" == *"openwrt"* ]]; then
-            REPO_URL="https://github.com/laipeng668/openwrt.git"
-            REPO_BRANCH="master"
-          else
-            REPO_URL="https://github.com/laipeng668/immortalwrt.git"
-            REPO_BRANCH="master"
-          fi
-          
-          echo "Using REPO_URL: $REPO_URL"
-          echo "Using REPO_BRANCH: $REPO_BRANCH"
-          
-          git clone --depth 1 -b "$REPO_BRANCH" --single-branch "$REPO_URL" /mnt/openwrt
+          git clone --depth 1 -b master --single-branch https://github.com/laipeng668/immortalwrt.git /mnt/openwrt
           cd /mnt/openwrt
           echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
           VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
@@ -118,113 +88,18 @@ jobs:
 
       - name: Generate Variables(生成变量)
         run: |
-          # 解析 model 名称
-          MODEL="${{ matrix.model }}"
-          echo "Processing model: $MODEL"
-          
-          # 分割 model 字符串 (模拟 split)
-          IFS='_' read -ra PARTS <<< "$MODEL"
-          CHIP="${PARTS[0]}"
-          BRANCH_ABBR="${PARTS[1]}"
-          CONFIG_TYPE="${PARTS[2]}"
-          
-          echo "Chip: $CHIP"
-          echo "Branch Abbreviation: $BRANCH_ABBR"
-          echo "Config Type: $CONFIG_TYPE"
-          
-          # 根据分支缩写设置 REPO_URL 和 REPO_BRANCH (再次确认)
-          REPO_URL=""
-          REPO_BRANCH=""
-          if [[ "$MODEL" == *"libwrt"* ]]; then
-            REPO_URL="https://github.com/laipeng668/immortalwrt.git"
-            REPO_BRANCH="k6.12-nss"
-          elif [[ "$MODEL" == *"openwrt"* ]]; then
-            REPO_URL="https://github.com/laipeng668/openwrt.git"
-            REPO_BRANCH="master"
-          else
-            REPO_URL="https://github.com/laipeng668/immortalwrt.git"
-            REPO_BRANCH="master"
-          fi
-          
-          echo "Final REPO_URL: $REPO_URL"
-          echo "Final REPO_BRANCH: $REPO_BRANCH"
-          
-          # 复制基础配置文件
-          if [ -f "${{ env.GENERAL_CONFIG_FILE }}" ]; then
-            cp "${{ env.GENERAL_CONFIG_FILE }}" "${OPENWRT_PATH}/.config"
-          else
-            echo "Error: General.config not found."
-            exit 1
-          fi
-
-          # 添加基础配置文件
-          if [ -f "${{ env.BASE_CONFIG_FILE }}" ]; then
-            cat "${{ env.BASE_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
-          else
-            echo "Error: Base config file not found."
-            exit 1
-          fi
-
-          # 添加特定配置文件
-          case "$CONFIG_TYPE" in
-            "Pro")
-              if [ -f "${{ env.PRO_CONFIG_FILE }}" ]; then
-                cat "${{ env.PRO_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
-              else
-                echo "Error: Pro.config not found."
-                exit 1
-              fi
-              ;;
-            "Max")
-              if [ -f "${{ env.MAX_CONFIG_FILE }}" ]; then
-                cat "${{ env.MAX_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
-              else
-                echo "Error: Max.config not found."
-                exit 1
-              fi
-              ;;
-            "Ultra")
-              if [ -f "${{ env.ULTRA_CONFIG_FILE }}" ]; then
-                cat "${{ env.ULTRA_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
-              else
-                echo "Error: Ultra.config not found."
-                exit 1
-              fi
-              ;;
-            *)
-              echo "Unknown CONFIG_TYPE: $CONFIG_TYPE"
-              exit 1
-              ;;
-          esac
-
-          # 如果是 libwrt，则添加 Libwrt.config
-          if [[ "$BRANCH_ABBR" == "libwrt" ]]; then
-            if [ -f "${{ env.LIBWRT_CONFIG_FILE }}" ]; then
-              cat "${{ env.LIBWRT_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
-            else
-              echo "Error: Libwrt.config not found."
-              exit 1
-            fi
-          fi
-
-          cd $OPENWRT_PATH
-          make defconfig > /dev/null 2>&1
-          SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
-          echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
-          DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
-          echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
-          DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
-          echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
-          echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
-          echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+          # 这个 job 会为每个 model 生成不同的配置并编译
+          echo "Processing all models sequentially"
+          MODELS=(${{ needs.Preprocess.outputs.models }})
+          echo "Total models to process: ${#MODELS[@]}"
 
       - name: Cache Toolchain(缓存工具链)
         uses: actions/cache@main
         with:
-          key: ${{ env.SOURCE_REPO }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
+          key: immortalwrt-${{ env.HASH }} ${{ env.CACHE_DATE }}
           restore-keys: |
-            ${{ env.SOURCE_REPO }}-${{ env.HASH }}-
-            ${{ env.SOURCE_REPO }}-
+            immortalwrt-${{ env.HASH }}-
+            immortalwrt-
           path: |
             ${{ env.OPENWRT_PATH }}/.ccache
             ${{ env.OPENWRT_PATH }}/staging_dir
@@ -249,108 +124,194 @@ jobs:
           cd $OPENWRT_PATH
           $GITHUB_WORKSPACE/$DIY_SCRIPT
 
-      - name: Download DL Package(下载DL软件包)
+      - name: Compile All Models(编译所有模型)
         run: |
           cd $OPENWRT_PATH
-          make defconfig
-          make download -j$(nproc)
-
-      - name: Compile Firmware(开始编译固件)
-        id: compile
-        run: |
-          cd $OPENWRT_PATH
-          echo -e "$(nproc) thread compile"
-          make -j$(nproc) || make -j1 || make -j1 V=s
-          echo "status=success" >> $GITHUB_OUTPUT
-          echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-          echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
-
-      - name: Check Space Usage(检查空间使用情况)
-        if: (!cancelled())
-        run: df -hT
-
-      - name: Organize Files(整理文件)
-        if: steps.compile.outputs.status == 'success'
-        run: |
-          cd $OPENWRT_PATH/bin/targets/*/*
-
-          # --- 1. 收集固件文件 ---
-          # 获取所有 .bin 文件
-          BIN_FILES=$(find . -name "*.bin" -type f)
-          echo "Found BIN files:"
-          echo "$BIN_FILES"
-
-          # --- 2. 提取固件型号 ---
-          # 从 .config 文件中提取 CONFIG_TARGET_DEVICE_NAME
-          DEVICE_NAME=""
-          if [ -f "$OPENWRT_PATH/.config" ]; then
-            DEVICE_NAME=$(grep -E "^CONFIG_TARGET_DEVICE_NAME=" "$OPENWRT_PATH/.config" | cut -d'"' -f2)
-          fi
-          if [ -z "$DEVICE_NAME" ]; then
-            echo "Warning: Could not extract DEVICE_NAME from .config, using default 'unknown_device'"
-            DEVICE_NAME="unknown_device"
-          fi
-          echo "DEVICE_NAME from config: $DEVICE_NAME"
-
-          # --- 3. 重命名固件文件 ---
-          for file in $BIN_FILES; do
-            # 获取文件名
-            filename=$(basename "$file")
-            echo "Processing file: $filename"
-
-            # 提取模式 (factory/sysupgrade)
-            MODE=""
-            if [[ "$filename" == *"factory"* ]]; then
-              MODE="factory"
-            elif [[ "$filename" == *"sysupgrade"* ]]; then
-              MODE="sysupgrade"
+          MODELS=(${{ needs.Preprocess.outputs.models }})
+          for MODEL in "${MODELS[@]}"; do
+            echo "Compiling model: $MODEL"
+            
+            # 解析 model 名称
+            IFS='_' read -ra PARTS <<< "$MODEL"
+            CHIP="${PARTS[0]}"
+            BRANCH_ABBR="${PARTS[1]}"
+            CONFIG_TYPE="${PARTS[2]}"
+            
+            echo "Chip: $CHIP"
+            echo "Branch Abbreviation: $BRANCH_ABBR"
+            echo "Config Type: $CONFIG_TYPE"
+            
+            # 根据分支缩写设置 REPO_URL 和 REPO_BRANCH
+            REPO_URL=""
+            REPO_BRANCH=""
+            if [[ "$MODEL" == *"libwrt"* ]]; then
+              REPO_URL="https://github.com/laipeng668/immortalwrt.git"
+              REPO_BRANCH="k6.12-nss"
+            elif [[ "$MODEL" == *"openwrt"* ]]; then
+              REPO_URL="https://github.com/laipeng668/openwrt.git"
+              REPO_BRANCH="master"
             else
-              echo "Warning: Unknown mode in filename: $filename"
-              MODE="unknown"
+              REPO_URL="https://github.com/laipeng668/immortalwrt.git"
+              REPO_BRANCH="master"
+            fi
+            
+            # 复制基础配置文件
+            if [ -f "${{ env.GENERAL_CONFIG_FILE }}" ]; then
+              cp "${{ env.GENERAL_CONFIG_FILE }}" "${OPENWRT_PATH}/.config"
+            else
+              echo "Error: General.config not found."
+              exit 1
             fi
 
-            # 构造新的文件名
-            # 原始命名: immortalwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-factory.bin
-            # 新命名: immwrt-jdcloud_re-cs-02-factory-Pro.bin
-            # 即: BRANCH_ABBR-DEVICE_NAME-MODE-CONFIG_TYPE.bin
-            NEW_NAME="${{ env.BRANCH_ABBR }}-${DEVICE_NAME}-${MODE}-${{ env.CONFIG_TYPE }}.bin"
-            echo "Renaming $filename to $NEW_NAME"
-            mv "$file" "$NEW_NAME"
+            # 添加基础配置文件
+            if [ -f "${{ env.BASE_CONFIG_FILE }}" ]; then
+              cat "${{ env.BASE_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
+            else
+              echo "Error: Base config file not found."
+              exit 1
+            fi
+
+            # 添加特定配置文件
+            case "$CONFIG_TYPE" in
+              "Pro")
+                if [ -f "${{ env.PRO_CONFIG_FILE }}" ]; then
+                  cat "${{ env.PRO_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
+                else
+                  echo "Error: Pro.config not found."
+                  exit 1
+                fi
+                ;;
+              "Max")
+                if [ -f "${{ env.MAX_CONFIG_FILE }}" ]; then
+                  cat "${{ env.MAX_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
+                else
+                  echo "Error: Max.config not found."
+                  exit 1
+                fi
+                ;;
+              "Ultra")
+                if [ -f "${{ env.ULTRA_CONFIG_FILE }}" ]; then
+                  cat "${{ env.ULTRA_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
+                else
+                  echo "Error: Ultra.config not found."
+                  exit 1
+                fi
+                ;;
+              *)
+                echo "Unknown CONFIG_TYPE: $CONFIG_TYPE"
+                exit 1
+                ;;
+            esac
+
+            # 如果是 libwrt，则添加 Libwrt.config
+            if [[ "$BRANCH_ABBR" == "libwrt" ]]; then
+              if [ -f "${{ env.LIBWRT_CONFIG_FILE }}" ]; then
+                cat "${{ env.LIBWRT_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
+              else
+                echo "Error: Libwrt.config not found."
+                exit 1
+              fi
+            fi
+
+            # 生成 defconfig
+            make defconfig > /dev/null 2>&1
+            SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
+            echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+            DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
+            echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
+            DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
+            echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
+            echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
+            echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+
+            # 下载依赖
+            make download -j$(nproc)
+
+            # 编译固件
+            echo "Compiling firmware for $MODEL..."
+            make -j$(nproc) || make -j1 || make -j1 V=s
+
+            # 整理文件
+            echo "Organizing files for $MODEL..."
+            cd bin/targets/*/*
+            # 获取所有 .bin 文件
+            BIN_FILES=$(find . -name "*.bin" -type f)
+            echo "Found BIN files for $MODEL:"
+            echo "$BIN_FILES"
+
+            # 提取固件型号
+            DEVICE_NAME=""
+            if [ -f "$OPENWRT_PATH/.config" ]; then
+              DEVICE_NAME=$(grep -E "^CONFIG_TARGET_DEVICE_NAME=" "$OPENWRT_PATH/.config" | cut -d'"' -f2)
+            fi
+            if [ -z "$DEVICE_NAME" ]; then
+              echo "Warning: Could not extract DEVICE_NAME from .config, using default 'unknown_device'"
+              DEVICE_NAME="unknown_device"
+            fi
+            echo "DEVICE_NAME from config: $DEVICE_NAME"
+
+            # 重命名固件文件
+            for file in $BIN_FILES; do
+              filename=$(basename "$file")
+              echo "Processing file: $filename"
+
+              # 提取模式 (factory/sysupgrade)
+              MODE=""
+              if [[ "$filename" == *"factory"* ]]; then
+                MODE="factory"
+              elif [[ "$filename" == *"sysupgrade"* ]]; then
+                MODE="sysupgrade"
+              else
+                echo "Warning: Unknown mode in filename: $filename"
+                MODE="unknown"
+              fi
+
+              # 构造新的文件名
+              NEW_NAME="${BRANCH_ABBR}-${DEVICE_NAME}-${MODE}-${CONFIG_TYPE}.bin"
+              echo "Renaming $filename to $NEW_NAME"
+              mv "$file" "$NEW_NAME"
+            done
+
+            # 复制 config 文件
+            cp "$OPENWRT_PATH/.config" "ipq60xx-${BRANCH_ABBR}-${CONFIG_TYPE}.config"
+            # 复制 config.buildinfo
+            if [ -f "config.buildinfo" ]; then
+              cp config.buildinfo "ipq60xx-${BRANCH_ABBR}-${CONFIG_TYPE}.config.buildinfo"
+            fi
+            # 复制 manifest 文件
+            PKG_MANIFEST_PATH="$OPENWRT_PATH/bin/packages/*/*/Packages.manifest"
+            if [ -f "$PKG_MANIFEST_PATH" ]; then
+              echo "Copying Packages.manifest from $PKG_MANIFEST_PATH"
+              cp "$PKG_MANIFEST_PATH" "ipq60xx-${BRANCH_ABBR}-${CONFIG_TYPE}.Packages.manifest"
+            else
+              echo "Packages.manifest not found at expected path: $PKG_MANIFEST_PATH"
+            fi
+
+            # 清理不必要的文件
+            rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
+
+            # 上传 artifact
+            ARTIFACT_NAME="${MODEL}-firmware-${DEVICE_TARGET}-${DEVICE_SUBTARGET}-$(date +"%Y.%m.%d")"
+            echo "Uploading artifact: $ARTIFACT_NAME"
+            # 这里需要将当前目录的文件打包成 artifact
+            # 但因为这是一个单个 job，我们不能像之前那样并行上传
+            # 所以我们将所有文件都放到一个目录中，最后一起上传
+            mkdir -p "/tmp/artifacts/${ARTIFACT_NAME}"
+            find . -type f -exec cp {} "/tmp/artifacts/${ARTIFACT_NAME}/" \;
+
+            echo "Finished compiling model: $MODEL"
           done
 
-          # --- 4. 复制 config 文件 ---
-          # 复制 .config 文件
-          cp "$OPENWRT_PATH/.config" "ipq60xx-${{ env.BRANCH_ABBR }}-${{ env.CONFIG_TYPE }}.config"
-          # 复制 config.buildinfo
-          if [ -f "config.buildinfo" ]; then
-            cp config.buildinfo "ipq60xx-${{ env.BRANCH_ABBR }}-${{ env.CONFIG_TYPE }}.config.buildinfo"
-          fi
-          # 复制 manifest 文件 (注意：可能需要调整路径)
-          # 尝试从 bin/packages/*/ 目录复制
-          PKG_MANIFEST_PATH="$OPENWRT_PATH/bin/packages/*/*/Packages.manifest"
-          if [ -f "$PKG_MANIFEST_PATH" ]; then
-            echo "Copying Packages.manifest from $PKG_MANIFEST_PATH"
-            cp "$PKG_MANIFEST_PATH" "ipq60xx-${{ env.BRANCH_ABBR }}-${{ env.CONFIG_TYPE }}.Packages.manifest"
-          else
-            echo "Packages.manifest not found at expected path: $PKG_MANIFEST_PATH"
-          fi
-
-          # --- 5. 清理不必要的文件 ---
-          rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
-
-          # --- 6. 设置最终输出目录 ---
-          echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
-
-      - name: Upload Firmware To Artifact(将固件上传到Artifact)
-        if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
+      - name: Upload All Firmware To Artifact(将所有固件上传到Artifact)
+        if: env.FIRMWARE_RELEASE != 'true'
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.MODEL }}-firmware-${{ env.FILE_DATE }}
-          path: ${{ env.FIRMWARE_PATH }}
+          name: all-firmware-${{ env.FILE_DATE }}
+          path: /tmp/artifacts/*
 
   # --- 最终发布阶段：收集所有构建产物并发布到 Release ---
   Publish_Release:
-    needs: [Preprocess, Build_Template]
+    needs: [Preprocess, Build]
     runs-on: ubuntu-22.04
     if: always() # 确保即使某些构建失败也尝试发布
     steps:
@@ -358,20 +319,30 @@ jobs:
         uses: actions/download-artifact@main
         with:
           path: artifacts/
-          pattern: "*-firmware-*"
-          merge-multiple: true # 合并所有匹配的 artifact
+          merge-multiple: true
 
       - name: List Downloaded Artifacts
         run: |
-          echo "Artifacts downloaded:"
-          find artifacts/ -type f -name "*.bin" -o -name "*.config" -o -name "*.manifest" -o -name "*.buildinfo"
+          echo "Checking artifacts directory..."
+          if [ -d "artifacts/" ]; then
+            echo "Artifacts downloaded:"
+            find artifacts/ -type f -name "*.bin" -o -name "*.config" -o -name "*.manifest" -o -name "*.buildinfo" || echo "No files found"
+          else
+            echo "Artifacts directory does not exist."
+            ls -la
+          fi
 
       - name: Create Release Assets
         run: |
           # 创建一个临时目录来存放所有要发布的文件
           mkdir -p release_assets/
-          # 将所有下载的文件移动到 release_assets 目录
-          find artifacts/ -type f \( -name "*.bin" -o -name "*.config" -o -name "*.manifest" -o -name "*.buildinfo" \) -exec cp {} release_assets/ \;
+          # 尝试从 artifacts 目录复制文件
+          if [ -d "artifacts/" ]; then
+            echo "Copying files from artifacts directory..."
+            find artifacts/ -type f \( -name "*.bin" -o -name "*.config" -o -name "*.manifest" -o -name "*.buildinfo" \) -exec cp {} release_assets/ \;
+          else
+            echo "No artifacts directory found."
+          fi
           ls -l release_assets/
 
       - name: Upload to GitHub Release

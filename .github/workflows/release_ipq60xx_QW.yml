@@ -52,13 +52,10 @@ jobs:
     env:
       # 从 model 名称中解析出芯片、分支缩写、配置类型
       MODEL: ${{ matrix.model }}
-      CHIP: ${{ split(matrix.model, '_')[0] }} # ipq60xx
-      BRANCH_ABBR: ${{ split(matrix.model, '_')[1] }} # immwrt, openwrt, libwrt
-      CONFIG_TYPE: ${{ split(matrix.model, '_')[2] }} # Pro, Max, Ultra
-
-      # 动态设置 REPO_URL 和 REPO_BRANCH
-      REPO_URL: ${{  (contains(matrix.model, 'libwrt') && 'https://github.com/laipeng668/immortalwrt.git') || (contains(matrix.model, 'openwrt') && 'https://github.com/laipeng668/openwrt.git') || 'https://github.com/laipeng668/immortalwrt.git' }}
-      REPO_BRANCH: ${{  (contains(matrix.model, 'libwrt') && 'k6.12-nss') || (contains(matrix.model, 'openwrt') && 'master') || 'master' }}
+      # 使用 fromJson 和 substring 方法模拟 split
+      # 这里我们使用一个技巧：将字符串转换为 JSON 数组来模拟分割
+      # 但更简单的方式是直接在脚本中处理
+      # 我们将直接在 Generate Variables 步骤中处理这些逻辑
 
     steps:
       - name: Check Server Performance(检查服务器性能)
@@ -92,7 +89,26 @@ jobs:
           df -hT $GITHUB_WORKSPACE
           sudo mkdir -p /mnt/openwrt
           sudo chown -R $(id -u):$(id -g) /mnt/openwrt
-          git clone --depth 1 -b ${{ env.REPO_BRANCH }} --single-branch ${{ env.REPO_URL }} /mnt/openwrt
+          # 根据 model 名称动态设置 repo url 和 branch
+          MODEL="${{ matrix.model }}"
+          REPO_URL=""
+          REPO_BRANCH=""
+          
+          if [[ "$MODEL" == *"libwrt"* ]]; then
+            REPO_URL="https://github.com/laipeng668/immortalwrt.git"
+            REPO_BRANCH="k6.12-nss"
+          elif [[ "$MODEL" == *"openwrt"* ]]; then
+            REPO_URL="https://github.com/laipeng668/openwrt.git"
+            REPO_BRANCH="master"
+          else
+            REPO_URL="https://github.com/laipeng668/immortalwrt.git"
+            REPO_BRANCH="master"
+          fi
+          
+          echo "Using REPO_URL: $REPO_URL"
+          echo "Using REPO_BRANCH: $REPO_BRANCH"
+          
+          git clone --depth 1 -b "$REPO_BRANCH" --single-branch "$REPO_URL" /mnt/openwrt
           cd /mnt/openwrt
           echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
           VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
@@ -102,11 +118,37 @@ jobs:
 
       - name: Generate Variables(生成变量)
         run: |
-          # 根据模型名确定配置文件组合
-          echo "Model: ${{ env.MODEL }}"
-          echo "Repo URL: ${{ env.REPO_URL }}"
-          echo "Repo Branch: ${{ env.REPO_BRANCH }}"
-
+          # 解析 model 名称
+          MODEL="${{ matrix.model }}"
+          echo "Processing model: $MODEL"
+          
+          # 分割 model 字符串 (模拟 split)
+          IFS='_' read -ra PARTS <<< "$MODEL"
+          CHIP="${PARTS[0]}"
+          BRANCH_ABBR="${PARTS[1]}"
+          CONFIG_TYPE="${PARTS[2]}"
+          
+          echo "Chip: $CHIP"
+          echo "Branch Abbreviation: $BRANCH_ABBR"
+          echo "Config Type: $CONFIG_TYPE"
+          
+          # 根据分支缩写设置 REPO_URL 和 REPO_BRANCH (再次确认)
+          REPO_URL=""
+          REPO_BRANCH=""
+          if [[ "$MODEL" == *"libwrt"* ]]; then
+            REPO_URL="https://github.com/laipeng668/immortalwrt.git"
+            REPO_BRANCH="k6.12-nss"
+          elif [[ "$MODEL" == *"openwrt"* ]]; then
+            REPO_URL="https://github.com/laipeng668/openwrt.git"
+            REPO_BRANCH="master"
+          else
+            REPO_URL="https://github.com/laipeng668/immortalwrt.git"
+            REPO_BRANCH="master"
+          fi
+          
+          echo "Final REPO_URL: $REPO_URL"
+          echo "Final REPO_BRANCH: $REPO_BRANCH"
+          
           # 复制基础配置文件
           if [ -f "${{ env.GENERAL_CONFIG_FILE }}" ]; then
             cp "${{ env.GENERAL_CONFIG_FILE }}" "${OPENWRT_PATH}/.config"
@@ -124,7 +166,7 @@ jobs:
           fi
 
           # 添加特定配置文件
-          case "${{ env.CONFIG_TYPE }}" in
+          case "$CONFIG_TYPE" in
             "Pro")
               if [ -f "${{ env.PRO_CONFIG_FILE }}" ]; then
                 cat "${{ env.PRO_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
@@ -150,13 +192,13 @@ jobs:
               fi
               ;;
             *)
-              echo "Unknown CONFIG_TYPE: ${{ env.CONFIG_TYPE }}"
+              echo "Unknown CONFIG_TYPE: $CONFIG_TYPE"
               exit 1
               ;;
           esac
 
           # 如果是 libwrt，则添加 Libwrt.config
-          if [[ "${{ env.BRANCH_ABBR }}" == "libwrt" ]]; then
+          if [[ "$BRANCH_ABBR" == "libwrt" ]]; then
             if [ -f "${{ env.LIBWRT_CONFIG_FILE }}" ]; then
               cat "${{ env.LIBWRT_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
             else
@@ -167,7 +209,7 @@ jobs:
 
           cd $OPENWRT_PATH
           make defconfig > /dev/null 2>&1
-          SOURCE_REPO="$(echo ${{ env.REPO_URL }} | awk -F '/' '{print $(NF)}')"
+          SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
           echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
           DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
           echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV

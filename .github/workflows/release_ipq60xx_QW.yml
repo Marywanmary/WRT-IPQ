@@ -87,6 +87,9 @@ jobs:
           echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
           VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12)
           echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
+          # 检查配置文件是否存在
+          echo "Checking config files in repository:"
+          ls -la deconfig/
 
       - name: Generate Variables(生成变量)
         run: |
@@ -147,7 +150,7 @@ jobs:
             REPO_URL=""
             REPO_BRANCH=""
             if [[ "$MODEL" == *"libwrt"* ]]; then
-              REPO_URL="https://github.com/laipeng668/immortalwrt.git"
+              REPO_URL="https://github.com/laipeng668/openwrt-6.x.git"
               REPO_BRANCH="k6.12-nss"
             elif [[ "$MODEL" == *"openwrt"* ]]; then
               REPO_URL="https://github.com/laipeng668/openwrt.git"
@@ -157,17 +160,25 @@ jobs:
               REPO_BRANCH="master"
             fi
             
+            echo "Using REPO_URL: $REPO_URL"
+            echo "Using REPO_BRANCH: $REPO_BRANCH"
+            
             # 复制基础配置文件
             if [ -f "${{ env.GENERAL_CONFIG_FILE }}" ]; then
+              echo "Copying General.config from ${{ env.GENERAL_CONFIG_FILE }}"
               cp "${{ env.GENERAL_CONFIG_FILE }}" "${OPENWRT_PATH}/.config"
             else
               echo "Error: General.config not found at ${{ env.GENERAL_CONFIG_FILE }}."
-              ls -la ${{ env.GENERAL_CONFIG_FILE }}
+              echo "Current directory contents:"
+              ls -la
+              echo "Contents of deconfig/ directory:"
+              ls -la deconfig/
               exit 1
             fi
 
             # 添加基础配置文件
             if [ -f "${{ env.BASE_CONFIG_FILE }}" ]; then
+              echo "Adding Base config from ${{ env.BASE_CONFIG_FILE }}"
               cat "${{ env.BASE_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
             else
               echo "Error: Base config file not found at ${{ env.BASE_CONFIG_FILE }}."
@@ -179,6 +190,7 @@ jobs:
             case "$CONFIG_TYPE" in
               "Pro")
                 if [ -f "${{ env.PRO_CONFIG_FILE }}" ]; then
+                  echo "Adding Pro config from ${{ env.PRO_CONFIG_FILE }}"
                   cat "${{ env.PRO_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
                 else
                   echo "Error: Pro.config not found at ${{ env.PRO_CONFIG_FILE }}."
@@ -188,6 +200,7 @@ jobs:
                 ;;
               "Max")
                 if [ -f "${{ env.MAX_CONFIG_FILE }}" ]; then
+                  echo "Adding Max config from ${{ env.MAX_CONFIG_FILE }}"
                   cat "${{ env.MAX_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
                 else
                   echo "Error: Max.config not found at ${{ env.MAX_CONFIG_FILE }}."
@@ -197,6 +210,7 @@ jobs:
                 ;;
               "Ultra")
                 if [ -f "${{ env.ULTRA_CONFIG_FILE }}" ]; then
+                  echo "Adding Ultra config from ${{ env.ULTRA_CONFIG_FILE }}"
                   cat "${{ env.ULTRA_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
                 else
                   echo "Error: Ultra.config not found at ${{ env.ULTRA_CONFIG_FILE }}."
@@ -213,6 +227,7 @@ jobs:
             # 如果是 libwrt，则添加 Libwrt.config
             if [[ "$BRANCH_ABBR" == "libwrt" ]]; then
               if [ -f "${{ env.LIBWRT_CONFIG_FILE }}" ]; then
+                echo "Adding Libwrt config from ${{ env.LIBWRT_CONFIG_FILE }}"
                 cat "${{ env.LIBWRT_CONFIG_FILE }}" >> "${OPENWRT_PATH}/.config"
               else
                 echo "Error: Libwrt.config not found at ${{ env.LIBWRT_CONFIG_FILE }}."

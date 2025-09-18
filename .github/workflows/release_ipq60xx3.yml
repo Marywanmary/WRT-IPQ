@@ -69,8 +69,8 @@ jobs:
         echo "分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
         echo -e "已知CPU型号（降序）：7763，8370C，8272CL，8171M，E5-2673"
         echo "--------------------------CPU信息--------------------------"
-        echo "CPU物理数量：$(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
-        echo -e "CPU核心信息：$(cat /proc/cpuinfo | grep "name" | cut -f2 -d: | uniq -c)"
+        echo "CPU物理数量：$(cat /proc/cpuinfo | grep 'physical id' | sort | uniq | wc -l)"
+        echo -e "CPU核心信息：$(cat /proc/cpuinfo | grep 'name' | cut -f2 -d: | uniq -c)"
         echo "--------------------------内存信息--------------------------"
         echo "已安装内存详细信息："
         echo -e "$(sudo lshw -short -C memory | grep GiB)"
@@ -388,24 +388,27 @@ jobs:
         
         for file in *.bin; do
           [ -f "$file" ] || continue
-          if [[ "$file" =~ factory|sysupgrade ]]; then
-            MODE=$(echo "$file" | grep -oE "factory|sysupgrade")
-            
-            CHIP="${{ steps.setup_vars.outputs.CHIP }}"
-            if [[ "$file" =~ ${CHIP}-(.+)-squashfs ]]; then
-              MODEL="${BASH_REMATCH[1]}"
-            else
-              MODEL="unknown-model"
-              echo "Warning: Could not determine model from filename: $file"
-            fi
-            
-            BRANCH_ABBR="${{ steps.setup_vars.outputs.BRANCH_ABBR }}"
-            CONFIG_TYPE="${{ steps.setup_vars.outputs.CONFIG_TYPE }}"
-            
-            NEW_NAME="${BRANCH_ABBR}-${MODEL}-${MODE}-${CONFIG_TYPE}.bin"
-            cp "$file" "$DEVICE_OUTPUT_DIR/$NEW_NAME"
-            echo "Renamed: $file -> $NEW_NAME"
-          fi
+          # 修复第529行的问题：使用case语句替代正则表达式
+          case "$file" in
+            *factory*|*sysupgrade*)
+              MODE=$(echo "$file" | grep -oE "factory|sysupgrade")
+              
+              CHIP="${{ steps.setup_vars.outputs.CHIP }}"
+              if [[ "$file" =~ ${CHIP}-(.+)-squashfs ]]; then
+                MODEL="${BASH_REMATCH[1]}"
+              else
+                MODEL="unknown-model"
+                echo "Warning: Could not determine model from filename: $file"
+              fi
+              
+              BRANCH_ABBR="${{ steps.setup_vars.outputs.BRANCH_ABBR }}"
+              CONFIG_TYPE="${{ steps.setup_vars.outputs.CONFIG_TYPE }}"
+              
+              NEW_NAME="${BRANCH_ABBR}-${MODEL}-${MODE}-${CONFIG_TYPE}.bin"
+              cp "$file" "$DEVICE_OUTPUT_DIR/$NEW_NAME"
+              echo "Renamed: $file -> $NEW_NAME"
+              ;;
+          esac
         done
         
         PKG_DIR="${{ steps.prepare_env.outputs.OPENWRT_PATH }}/bin/packages"

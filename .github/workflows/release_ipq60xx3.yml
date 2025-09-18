@@ -33,6 +33,12 @@ env:
   PARALLEL_COMPILE: "-j$(nproc)"
   SINGLE_THREAD: "-j1"
   VERBOSE_COMPILE: "-j1 V=s"
+  # 重试参数
+  MAX_RETRIES: 3
+  RETRY_INTERVAL: 10
+  DOWNLOAD_RETRY_INTERVAL: 15
+  # 资源限制
+  MIN_DISK_SPACE_KB: 10485760  # 10GB
 
 jobs:
   # 初始化环境作业 - 为所有构建作业准备通用环境
@@ -48,15 +54,15 @@ jobs:
       run: |
         set -euxo pipefail
         # 添加重试机制
-        for i in {1..3}; do
+        for i in $(seq 1 ${{ env.MAX_RETRIES }}); do
           if sudo -E apt-get -y update; then
             break
-          elif [ $i -eq 3 ]; then
-            echo "Failed to update package list after 3 attempts"
+          elif [ $i -eq ${{ env.MAX_RETRIES }} ]; then
+            echo "Failed to update package list after ${{ env.MAX_RETRIES }} attempts"
             exit 1
           else
             echo "Retrying package list update..."
-            sleep 10
+            sleep ${{ env.RETRY_INTERVAL }}
           fi
         done
         
@@ -155,8 +161,8 @@ jobs:
       run: |
         set -euxo pipefail
         AVAILABLE_SPACE=$(df -k --output=avail / | tail -1)
-        if [ "$AVAILABLE_SPACE" -lt 10485760 ]; then  # 小于10GB
-          echo "Error: Insufficient disk space ($(($AVAILABLE_SPACE/1024))MB available)"
+        if [ "$AVAILABLE_SPACE" -lt ${{ env.MIN_DISK_SPACE_KB }} ]; then
+          echo "Error: Insufficient disk space ($(($AVAILABLE_SPACE/1024))MB available, at least $((${{ env.MIN_DISK_SPACE_KB }}/1024))MB required)"
           exit 1
         fi
 
@@ -170,16 +176,16 @@ jobs:
         mkdir -p "${{ steps.setup_vars.outputs.DEVICE_WORK_DIR }}"
         
         # 添加重试机制
-        for i in {1..3}; do
+        for i in $(seq 1 ${{ env.MAX_RETRIES }}); do
           if git clone --depth 1 -b "${{ steps.setup_vars.outputs.REPO_BRANCH }}" --single-branch "${{ steps.setup_vars.outputs.REPO_URL }}" "${{ steps.setup_vars.outputs.DEVICE_WORK_DIR }}"; then
             break
-          elif [ $i -eq 3 ]; then
-            echo "Failed to clone repository after 3 attempts"
+          elif [ $i -eq ${{ env.MAX_RETRIES }} ]; then
+            echo "Failed to clone repository after ${{ env.MAX_RETRIES }} attempts"
             exit 1
           else
             echo "Retrying clone..."
             rm -rf "${{ steps.setup_vars.outputs.DEVICE_WORK_DIR }}"
-            sleep 15
+            sleep ${{ env.RETRY_INTERVAL }}
           fi
         done
         
@@ -220,8 +226,17 @@ jobs:
       run: |
         set -euxo pipefail
         cd "${{ steps.clone.outputs.OPENWRT_PATH }}"
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+        for i in $(seq 1 ${{ env.MAX_RETRIES }}); do
+          if ./scripts/feeds update -a && ./scripts/feeds install -a; then
+            break
+          elif [ $i -eq ${{ env.MAX_RETRIES }} ]; then
+            echo "Failed to install feeds after ${{ env.MAX_RETRIES }} attempts"
+            exit 1
+          else
+            echo "Retrying feeds install..."
+            sleep ${{ env.RETRY_INTERVAL }}
+          fi
+        done
   
     - name: Load Custom Configuration(加载自定义配置)
       run: |
@@ -236,7 +251,17 @@ jobs:
         cat ${{ steps.setup_vars.outputs.CONFIG_FILES }} > "${{ steps.clone.outputs.OPENWRT_PATH }}/.config"
         cd "${{ steps.clone.outputs.OPENWRT_PATH }}"
         make defconfig
-        make download ${{ env.PARALLEL_COMPILE }}
+        for i in $(seq 1 ${{ env.MAX_RETRIES }}); do
+          if make download ${{ env.PARALLEL_COMPILE }}; then
+            break
+          elif [ $i -eq ${{ env.MAX_RETRIES }} ]; then
+            echo "Failed to download packages after ${{ env.MAX_RETRIES }} attempts"
+            exit 1
+          else
+            echo "Retrying package download..."
+            sleep ${{ env.DOWNLOAD_RETRY_INTERVAL }}
+          fi
+        done
 
     - name: Compile Firmware(开始编译固件)
       id: compile
@@ -381,6 +406,7 @@ jobs:
   Package_Artifacts:
     runs-on: ubuntu-22.04
     needs: Build
+    if: always()  # 即使部分构建失败也执行
     steps:
     - name: Checkout(检出代码)
       uses: actions/checkout@main
@@ -390,56 +416,68 @@ jobs:
         set -euxo pipefail
         PKG_DIR="${{ env.SHARED_ARTIFACTS_DIR }}/all_packages"
         
-        if [ -d "$PKG_DIR" ]; then
-          # 使用md5sum去重
-          cd "$PKG_DIR"
-          
-          # 计算所有文件的md5值
-          for file in *.ipk *.apk; do
-            [ -f "$file" ] || continue
-            md5sum "$file" >> checksums.txt
-          done
-          
-          # 根据md5值去重，保留第一个出现的文件
-          awk '!seen[$1]++ { print $2 }' checksums.txt > unique_files.txt
-          
-          # 创建去重后的目录
-          DEDUP_DIR="${{ env.SHARED_ARTIFACTS_DIR }}/dedup_packages"
-          mkdir -p "$DEDUP_DIR"
-          
-          # 复制去重后的文件
-          while read -r file; do
-            cp "$file" "$DEDUP_DIR/"
-          done < unique_files.txt
-          
-          # 生成软件包列表
-          cd "$DEDUP_DIR"
-          ls -1 *.ipk *.apk | sort > "${{ env.SHARED_ARTIFACTS_DIR }}/packages_list.txt"
-          
-          # 打包去重后的软件包
-          cd "${{ env.SHARED_ARTIFACTS_DIR }}"
-          tar -czf "packages-all.tar.gz" -C dedup_packages .
-          
-          echo "Packages merged and deduplicated to packages-all.tar.gz"
-        else
-          echo "Warning: No packages found"
+        if [ ! -d "$PKG_DIR" ]; then
+          echo "Warning: Packages directory not found"
           touch "${{ env.SHARED_ARTIFACTS_DIR }}/packages_list.txt"
+          exit 0
         fi
+        
+        cd "$PKG_DIR"
+        
+        # 使用更高效的去重方法：先按大小和修改时间去重，再计算md5
+        find . -name "*.ipk" -o -name "*.apk" | while read -r file; do
+          size=$(stat -c%s "$file")
+          mtime=$(stat -c%Y "$file")
+          echo "$size $mtime $file"
+        done | sort -u | cut -d' ' -f3- > potential_unique_files.txt
+        
+        # 对潜在唯一文件计算md5进行最终去重
+        > checksums.txt
+        > unique_files.txt
+        
+        while read -r file; do
+          [ -f "$file" ] || continue
+          md5=$(md5sum "$file" | cut -d' ' -f1)
+          if ! grep -q "^$md5 " checksums.txt; then
+            echo "$md5 $file" >> checksums.txt
+            echo "$file" >> unique_files.txt
+          fi
+        done < potential_unique_files.txt
+        
+        # 创建去重后的目录
+        DEDUP_DIR="${{ env.SHARED_ARTIFACTS_DIR }}/dedup_packages"
+        mkdir -p "$DEDUP_DIR"
+        
+        # 复制去重后的文件
+        while read -r file; do
+          cp "$file" "$DEDUP_DIR/"
+        done < unique_files.txt
+        
+        # 生成软件包列表
+        cd "$DEDUP_DIR"
+        find . -name "*.ipk" -o -name "*.apk" | sed 's|^\./||' | sort > "${{ env.SHARED_ARTIFACTS_DIR }}/packages_list.txt"
+        
+        # 打包去重后的软件包
+        cd "${{ env.SHARED_ARTIFACTS_DIR }}"
+        tar -czf "packages-all.tar.gz" -C dedup_packages .
+        
+        echo "Packages merged and deduplicated to packages-all.tar.gz"
 
     - name: Merge Logs(合并日志)
       run: |
         set -euxo pipefail
         LOG_DIR="${{ env.SHARED_ARTIFACTS_DIR }}/all_logs"
         
-        if [ -d "$LOG_DIR" ]; then
-          # 打包所有日志文件
-          cd "${{ env.SHARED_ARTIFACTS_DIR }}"
-          tar -czf "logs-all.tar.gz" -C all_logs .
-          
-          echo "Logs merged to logs-all.tar.gz"
-        else
-          echo "Warning: No logs found"
+        if [ ! -d "$LOG_DIR" ]; then
+          echo "Warning: Logs directory not found"
+          exit 0
         fi
+        
+        # 打包所有日志文件
+        cd "${{ env.SHARED_ARTIFACTS_DIR }}"
+        tar -czf "logs-all.tar.gz" -C all_logs .
+        
+        echo "Logs merged to logs-all.tar.gz"
 
     - name: Generate Release Info(生成Release信息)
       run: |
@@ -471,6 +509,8 @@ EOF
             for bin_file in "$device_dir"/*.bin; do
               echo "- $(basename "$bin_file")" >> "${{ env.SHARED_ARTIFACTS_DIR }}/release_info.md"
             done
+          else
+            echo "**固件文件**: 构建失败" >> "${{ env.SHARED_ARTIFACTS_DIR }}/release_info.md"
           fi
           
           # 查找配置文件

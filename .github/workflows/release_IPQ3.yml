@@ -1,0 +1,279 @@
+name: Release-IPQ60XX-CZ3
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: 0 20 * * 4
+
+env:
+  TZ: Asia/Shanghai
+  # 使用|作为分隔符，避免与URL中的冒号冲突
+  REPO_MAP: |
+    immwrt|https://github.com/laipeng668/immortalwrt.git|master|immwrt
+    openwrt|https://github.com/laipeng668/openwrt.git|master|openwrt
+    libwrt|https://github.com/laipeng668/openwrt-6.x.git|k6.12-nss|libwrt
+  # 修改配置文件路径为deconfig目录
+  CONFIG_MAP: |
+    Pro|deconfig/Pro.config
+    Max|deconfig/Max.config
+    Ultra|deconfig/Ultra.config
+  # 基础配置文件路径
+  GENERAL_CONFIG: "deconfig/General.config"
+  BASE_CONFIG: "deconfig/IPQ60XX.config"
+  LIBWRT_CONFIG: "deconfig/Libwrt.config"
+  DIY_SCRIPT: "scripts/script.sh"
+  # 共享日志目录
+  SHARED_LOGS_DIR: ${{ github.workspace }}/logs
+  # 共享构建产物目录
+  SHARED_ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+  # 共享软件包目录
+  SHARED_PACKAGES_DIR: ${{ github.workspace }}/packages
+  # 基础工作目录
+  BASE_WORK_DIR: "/mnt/openwrt"
+
+jobs:
+  # 初始化环境作业 - 为所有构建作业准备通用环境
+  Setup:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Checkout(检出代码)
+      uses: actions/checkout@main
+
+    - name: Initialization Environment(初始化环境)
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        set -euxo pipefail
+        # 更新软件包列表并安装编译依赖
+        sudo -E apt-get -y update
+        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
+        sudo -E systemctl daemon-reload
+        sudo timedatectl set-timezone "$TZ"
+        
+        # 创建共享日志目录
+        mkdir -p ${{ env.SHARED_LOGS_DIR }}
+        
+        # 创建共享构建产物目录
+        mkdir -p ${{ env.SHARED_ARTIFACTS_DIR }}
+        
+        # 创建共享软件包目录
+        mkdir -p ${{ env.SHARED_PACKAGES_DIR }}
+        
+        # 创建基础工作目录
+        sudo mkdir -p ${{ env.BASE_WORK_DIR }}
+        sudo chown -R $(id -u):$(id -g) ${{ env.BASE_WORK_DIR }}
+
+    - name: Check Server Performance(检查服务器性能)
+      run: |
+        echo "警告⚠"
+        echo "分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
+        echo -e "已知CPU型号（降序）：7763，8370C，8272CL，8171M，E5-2673"
+        echo "--------------------------CPU信息--------------------------"
+        echo "CPU物理数量：$(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
+        echo -e "CPU核心信息：$(cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c)"
+        echo "--------------------------内存信息--------------------------"
+        echo "已安装内存详细信息："
+        echo -e "$(sudo lshw -short -C memory | grep GiB)"
+        echo "--------------------------硬盘信息--------------------------"
+        echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+
+  # 构建作业 - 并行构建不同配置的固件
+  Build:
+    runs-on: ubuntu-22.04
+    needs: Setup  # 依赖初始化作业
+    strategy:
+      matrix:
+        device: [
+          "ipq60xx_immwrt_Pro",
+          "ipq60xx_immwrt_Max", 
+          "ipq60xx_immwrt_Ultra",
+          "ipq60xx_openwrt_Pro",
+          "ipq60xx_openwrt_Max",
+          "ipq60xx_openwrt_Ultra",
+          "ipq60xx_libwrt_Pro",
+          "ipq60xx_libwrt_Max",
+          "ipq60xx_libwrt_Ultra"
+        ]
+
+    steps:
+    - name: Checkout(检出代码)
+      uses: actions/checkout@main
+
+    - name: Parse Device Info(解析设备信息)
+      id: parse
+      run: |
+        set -euxo pipefail
+        
+        # 解析设备名称
+        CHIP=$(echo "${{ matrix.device }}" | cut -d'_' -f1)
+        BRANCH_ABBR=$(echo "${{ matrix.device }}" | cut -d'_' -f2)
+        CONFIG_TYPE=$(echo "${{ matrix.device }}" | cut -d'_' -f3)
+        
+        # 获取仓库信息 - 使用|作为分隔符
+        REPO_LINE=$(echo "${{ env.REPO_MAP }}" | grep "^$BRANCH_ABBR|")
+        REPO_URL=$(echo "$REPO_LINE" | cut -d'|' -f2)
+        REPO_BRANCH=$(echo "$REPO_LINE" | cut -d'|' -f3)
+        BRANCH_PREFIX=$(echo "$REPO_LINE" | cut -d'|' -f4)
+        
+        # 获取配置文件 - 使用|作为分隔符
+        CONFIG_LINE=$(echo "${{ env.CONFIG_MAP }}" | grep "^$CONFIG_TYPE|")
+        CONFIG_FILE=$(echo "$CONFIG_LINE" | cut -d'|' -f2)
+        
+        # 设置配置文件组合 - 使用环境变量中的路径
+        CONFIG_FILES="${{ env.GENERAL_CONFIG }} ${{ env.BASE_CONFIG }} $CONFIG_FILE"
+        
+        # 如果是libwrt分支，添加Libwrt.config
+        if [ "$BRANCH_ABBR" = "libwrt" ]; then
+          CONFIG_FILES="$CONFIG_FILES ${{ env.LIBWRT_CONFIG }}"
+        fi
+        
+        # 设置其他变量
+        DEVICE_PREFIX="${CHIP}-${BRANCH_ABBR}-${CONFIG_TYPE}"
+        REPO_SHORT=$(echo "$REPO_URL" | awk -F '/' '{print $(NF)}' | sed 's/\.git$//')
+        
+        # 为每个设备创建独立的工作目录
+        DEVICE_WORK_DIR="${{ env.BASE_WORK_DIR }}/${{ matrix.device }}"
+        
+        # 输出变量
+        echo "CHIP=$CHIP" >> $GITHUB_OUTPUT
+        echo "BRANCH_ABBR=$BRANCH_ABBR" >> $GITHUB_OUTPUT
+        echo "CONFIG_TYPE=$CONFIG_TYPE" >> $GITHUB_OUTPUT
+        echo "REPO_URL=$REPO_URL" >> $GITHUB_OUTPUT
+        echo "REPO_BRANCH=$REPO_BRANCH" >> $GITHUB_OUTPUT
+        echo "BRANCH_PREFIX=$BRANCH_PREFIX" >> $GITHUB_OUTPUT
+        echo "CONFIG_FILES=$CONFIG_FILES" >> $GITHUB_OUTPUT
+        echo "DEVICE_PREFIX=$DEVICE_PREFIX" >> $GITHUB_OUTPUT
+        echo "REPO_SHORT=$REPO_SHORT" >> $GITHUB_OUTPUT
+        echo "DEVICE_WORK_DIR=$DEVICE_WORK_DIR" >> $GITHUB_OUTPUT
+
+    - name: Clone Source Code(克隆源代码)
+      id: clone
+      run: |
+        set -euxo pipefail
+        df -hT $GITHUB_WORKSPACE
+        
+        # 使用设备特定的目录克隆源码
+        git clone --depth 1 -b "${{ steps.parse.outputs.REPO_BRANCH }}" --single-branch "${{ steps.parse.outputs.REPO_URL }}" "${{ steps.parse.outputs.DEVICE_WORK_DIR }}"
+        cd "${{ steps.parse.outputs.DEVICE_WORK_DIR }}"
+        OPENWRT_PATH="$PWD"
+        
+        # 输出变量
+        echo "OPENWRT_PATH=$OPENWRT_PATH" >> $GITHUB_OUTPUT
+
+    - name: Generate Variables(生成变量)
+      run: |
+        set -euxo pipefail
+        # 合并配置文件
+        cat ${{ steps.parse.outputs.CONFIG_FILES }} > "${{ steps.clone.outputs.OPENWRT_PATH }}/.config"
+        cd "${{ steps.clone.outputs.OPENWRT_PATH }}"
+        make defconfig > /dev/null 2>&1
+        SOURCE_REPO="$(echo ${{ steps.parse.outputs.REPO_URL }} | awk -F '/' '{print $(NF)}')"
+        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+        echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
+
+    - name: Cache Toolchain(缓存工具链)
+      uses: actions/cache@main
+      with:
+        # 优化缓存键：移除日期变量，提高缓存命中率
+        key: ${{ env.SOURCE_REPO }}-${{ env.HASH }}-${{ matrix.device }}
+        restore-keys: |
+          ${{ env.SOURCE_REPO }}-${{ env.HASH }}-${{ matrix.device }}-
+          ${{ env.SOURCE_REPO }}-${{ env.HASH }}-
+          ${{ env.SOURCE_REPO }}-
+        path: |
+          ${{ steps.clone.outputs.OPENWRT_PATH }}/.ccache
+          ${{ steps.clone.outputs.OPENWRT_PATH }}/staging_dir
+
+    - name: Refresh The Cache(刷新缓存)
+      run: |
+        set -euxo pipefail
+        if [ -d "${{ steps.clone.outputs.OPENWRT_PATH }}/staging_dir" ]; then
+          find "${{ steps.clone.outputs.OPENWRT_PATH }}/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
+              find "$dir" -type f -exec touch {} +
+          done
+        fi
+
+    - name: Install Feeds(安装feeds)
+      run: |
+        set -euxo pipefail
+        cd "${{ steps.clone.outputs.OPENWRT_PATH }}"
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+  
+    - name: Load Custom Configuration(加载自定义配置)
+      run: |
+        set -euxo pipefail
+        chmod +x ${{ env.DIY_SCRIPT }}
+        cd "${{ steps.clone.outputs.OPENWRT_PATH }}"
+        $GITHUB_WORKSPACE/${{ env.DIY_SCRIPT }}
+
+    - name: Download DL Package(下载DL软件包)
+      run: |
+        set -euxo pipefail
+        cat ${{ steps.parse.outputs.CONFIG_FILES }} > "${{ steps.clone.outputs.OPENWRT_PATH }}/.config"
+        cd "${{ steps.clone.outputs.OPENWRT_PATH }}"
+        make defconfig
+        make download -j$(nproc)
+
+    - name: Compile Firmware(开始编译固件)
+      id: compile
+      run: |
+        set -euxo pipefail
+        cd "${{ steps.clone.outputs.OPENWRT_PATH }}"
+        echo -e "$(nproc) thread compile"
+        
+        # 记录完整构建日志
+        make -j$(nproc) 2>&1 | tee build.log || make -j1 2>&1 | tee -a build.log || make -j1 V=s 2>&1 | tee -a build.log
+        
+        # 提取错误和警告日志
+        grep -i 'error\|warning' build.log > error_warning.log || true
+        
+        # 提取编译的luci包列表
+        grep -o 'luci-[^ ]*' build.log | sort -u > luci_packages_list.txt || true
+        
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Check Space Usage(检查空间使用情况)
+      if: (!cancelled())
+      run: df -hT
+
+    - name: Organize Files(整理文件)
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        set -euxo pipefail
+        cd "${{ steps.clone.outputs.OPENWRT_PATH }}/bin/targets/*/*"
+        
+        # 创建设备特定的输出目录
+        DEVICE_OUTPUT_DIR="${{ env.SHARED_ARTIFACTS_DIR }}/${{ matrix.device }}"
+        mkdir -p "$DEVICE_OUTPUT_DIR"
+        
+        # 复制日志文件到共享目录（按设备命名）
+        cp "${{ steps.clone.outputs.OPENWRT_PATH }}/build.log" "${{ env.SHARED_LOGS_DIR }}/${{ matrix.device }}_build.log"
+        cp "${{ steps.clone.outputs.OPENWRT_PATH }}/error_warning.log" "${{ env.SHARED_LOGS_DIR }}/${{ matrix.device }}_error_warning.log"
+        cp "${{ steps.clone.outputs.OPENWRT_PATH }}/luci_packages_list.txt" "${{ env.SHARED_LOGS_DIR }}/${{ matrix.device }}_luci_packages.txt"
+        
+        # 复制并重命名配置文件
+        cp "${{ steps.clone.outputs.OPENWRT_PATH }}/.config" "$DEVICE_OUTPUT_DIR/${{ steps.parse.outputs.DEVICE_PREFIX }}.config"
+        cp config.buildinfo "$DEVICE_OUTPUT_DIR/${{ steps.parse.outputs.DEVICE_PREFIX }}.config.buildinfo"
+        
+        # 复制manifest文件
+        cp *.manifest "$DEVICE_OUTPUT_DIR/${{ steps.parse.outputs.DEVICE_PREFIX }}.manifest"
+        
+        # 重命名固件文件
+        for file in *.bin; do
+          # 跳过非目标文件
+          [[ "$file" =~ factory|sysupgrade ]] || continue
+          
+          # 提取固件模式
+          MODE=$(echo "$file" | grep -oE "factory|sysupgrade")
+          
+          # 提取固件型号 - 从文件名中提取芯片和设备型号之间的部分
+          # 原始文件名格式: 芯片-设备型号-squashfs-模式.bin
+          if [[ "$file" =~ ${{ steps.parse.outputs.CHIP }}-([^-]+)-squashfs ]]; then
+            MODEL="${BASH_REMATCH[1]}"
+          else
+            MODEL="unknown-model"
+          fi
+          
+          # 新文件名格式: 分支缩写-

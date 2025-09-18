@@ -8,40 +8,30 @@ on:
 
 env:
   TZ: Asia/Shanghai
-  # 使用|作为分隔符，避免与URL中的冒号冲突
   REPO_MAP: |
     immwrt|https://github.com/laipeng668/immortalwrt.git|master|immwrt
     openwrt|https://github.com/laipeng668/openwrt.git|master|openwrt
     libwrt|https://github.com/laipeng668/openwrt-6.x.git|k6.12-nss|libwrt
-  # 修改配置文件路径为deconfig目录
   CONFIG_MAP: |
     Pro|deconfig/Pro.config
     Max|deconfig/Max.config
     Ultra|deconfig/Ultra.config
-  # 基础配置文件路径
   GENERAL_CONFIG: "deconfig/General.config"
   BASE_CONFIG: "deconfig/IPQ60XX.config"
   LIBWRT_CONFIG: "deconfig/Libwrt.config"
   DIY_SCRIPT: "scripts/script.sh"
-  # 共享日志目录
   SHARED_LOGS_DIR: ${{ github.workspace }}/logs
-  # 共享构建产物目录
   SHARED_ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
-  # 基础工作目录 - 使用工作空间内的目录
   BASE_WORK_DIR: "${{ github.workspace }}/openwrt_build"
-  # 编译选项
   PARALLEL_COMPILE: "-j$(nproc)"
   SINGLE_THREAD: "-j1"
   VERBOSE_COMPILE: "-j1 V=s"
-  # 重试参数
   MAX_RETRIES: 3
   RETRY_INTERVAL: 10
   DOWNLOAD_RETRY_INTERVAL: 15
-  # 资源限制
-  MIN_DISK_SPACE_KB: 10485760  # 10GB
+  MIN_DISK_SPACE_KB: 10485760
 
 jobs:
-  # 初始化环境作业 - 为所有构建作业准备通用环境
   Setup:
     runs-on: ubuntu-22.04
     steps:
@@ -53,7 +43,6 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         set -euxo pipefail
-        # 添加重试机制
         for i in $(seq 1 ${{ env.MAX_RETRIES }}); do
           if sudo -E apt-get -y update; then
             break
@@ -66,15 +55,12 @@ jobs:
           fi
         done
         
-        # 安装依赖
         sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
         sudo -E systemctl daemon-reload
         sudo timedatectl set-timezone "$TZ"
         
-        # 创建共享目录
         mkdir -p ${{ env.SHARED_LOGS_DIR }}
         mkdir -p ${{ env.SHARED_ARTIFACTS_DIR }}
-        # 创建基础工作目录（不再需要sudo和chown）
         mkdir -p ${{ env.BASE_WORK_DIR }}
 
     - name: Check Server Performance(检查服务器性能)
@@ -91,14 +77,13 @@ jobs:
         echo "--------------------------硬盘信息--------------------------"
         echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
 
-  # 基础构建作业 - 每个分支只构建一次基础环境
   Base_Build:
     runs-on: ubuntu-22.04
     needs: Setup
     strategy:
       matrix:
         branch: [immwrt, openwrt, libwrt]
-      max-parallel: 3  # 限制并发构建数量
+      max-parallel: 3
 
     steps:
     - name: Checkout(检出代码)
@@ -108,23 +93,17 @@ jobs:
       id: setup_vars
       run: |
         set -euxo pipefail
-        
-        # 获取仓库信息
         REPO_LINE=$(echo "${{ env.REPO_MAP }}" | grep "^${{ matrix.branch }}|")
         REPO_URL=$(echo "$REPO_LINE" | cut -d'|' -f2)
         REPO_BRANCH=$(echo "$REPO_LINE" | cut -d'|' -f3)
-        
-        # 设置其他变量
         SOURCE_REPO=$(echo "$REPO_URL" | awk -F '/' '{print $(NF)}' | sed 's/\.git$//')
         BRANCH_WORK_DIR="${{ env.BASE_WORK_DIR }}/${{ matrix.branch }}"
         
-        # 输出变量
         echo "BRANCH_ABBR=${{ matrix.branch }}" >> $GITHUB_OUTPUT
         echo "REPO_URL=$REPO_URL" >> $GITHUB_OUTPUT
         echo "REPO_BRANCH=$REPO_BRANCH" >> $GITHUB_OUTPUT
         echo "BRANCH_WORK_DIR=$BRANCH_WORK_DIR" >> $GITHUB_OUTPUT
         
-        # 设置环境变量
         echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
         echo "HASH=$(git log -1 --pretty=format:'%h' 2>/dev/null || echo 'unknown')" >> $GITHUB_ENV
 
@@ -143,10 +122,8 @@ jobs:
         set -euxo pipefail
         df -hT $GITHUB_WORKSPACE
         
-        # 创建分支特定的目录
         mkdir -p "${{ steps.setup_vars.outputs.BRANCH_WORK_DIR }}"
         
-        # 添加重试机制
         for i in $(seq 1 ${{ env.MAX_RETRIES }}); do
           if git clone --depth 1 -b "${{ steps.setup_vars.outputs.REPO_BRANCH }}" --single-branch "${{ steps.setup_vars.outputs.REPO_URL }}" "${{ steps.setup_vars.outputs.BRANCH_WORK_DIR }}"; then
             break
@@ -163,10 +140,8 @@ jobs:
         cd "${{ steps.setup_vars.outputs.BRANCH_WORK_DIR }}"
         OPENWRT_PATH="$PWD"
         
-        # 输出变量
         echo "OPENWRT_PATH=$OPENWRT_PATH" >> $GITHUB_OUTPUT
         
-        # 合并基础配置文件（不包含特定配置）
         cat ${{ env.GENERAL_CONFIG }} ${{ env.BASE_CONFIG }} > "$OPENWRT_PATH/.config"
         if [ "${{ matrix.branch }}" = "libwrt" ]; then
           cat ${{ env.LIBWRT_CONFIG }} >> "$OPENWRT_PATH/.config"
@@ -243,13 +218,11 @@ jobs:
         cd "${{ steps.clone.outputs.OPENWRT_PATH }}"
         echo -e "$(nproc) thread compile"
         
-        # 编译工具链和基础软件包
         if ! make ${{ env.PARALLEL_COMPILE }} toolchain/install; then
             echo "Toolchain build failed, trying single thread..."
             make ${{ env.SINGLE_THREAD }} toolchain/install
         fi
         
-        # 编译所有软件包（不生成固件）
         if ! make ${{ env.PARALLEL_COMPILE }} package/compile; then
             echo "Package compile failed, trying single thread..."
             make ${{ env.SINGLE_THREAD }} package/compile
@@ -276,7 +249,6 @@ jobs:
         
         echo "| ${{ matrix.branch }} | $status |" >> $GITHUB_STEP_SUMMARY
 
-  # 配置应用作业 - 基于基础构建，应用不同配置生成固件
   Config_Build:
     runs-on: ubuntu-22.04
     needs: Base_Build
@@ -293,7 +265,7 @@ jobs:
           "ipq60xx_libwrt_Max",
           "ipq60xx_libwrt_Ultra"
         ]
-      max-parallel: 6  # 可以增加并发数，因为这只是配置应用
+      max-parallel: 6
 
     steps:
     - name: Checkout(检出代码)
@@ -303,27 +275,21 @@ jobs:
       id: setup_vars
       run: |
         set -euxo pipefail
-        
-        # 解析设备名称
         CHIP=$(echo "${{ matrix.device }}" | cut -d'_' -f1)
         BRANCH_ABBR=$(echo "${{ matrix.device }}" | cut -d'_' -f2)
         CONFIG_TYPE=$(echo "${{ matrix.device }}" | cut -d'_' -f3)
         
-        # 获取仓库信息
         REPO_LINE=$(echo "${{ env.REPO_MAP }}" | grep "^$BRANCH_ABBR|")
         REPO_URL=$(echo "$REPO_LINE" | cut -d'|' -f2)
         REPO_BRANCH=$(echo "$REPO_LINE" | cut -d'|' -f3)
         
-        # 获取配置文件
         CONFIG_LINE=$(echo "${{ env.CONFIG_MAP }}" | grep "^$CONFIG_TYPE|")
         CONFIG_FILE=$(echo "$CONFIG_LINE" | cut -d'|' -f2)
         
-        # 设置其他变量
         DEVICE_PREFIX="${CHIP}-${BRANCH_ABBR}-${CONFIG_TYPE}"
         SOURCE_REPO=$(echo "$REPO_URL" | awk -F '/' '{print $(NF)}' | sed 's/\.git$//')
         BRANCH_WORK_DIR="${{ env.BASE_WORK_DIR }}/${BRANCH_ABBR}"
         
-        # 输出变量
         echo "CHIP=$CHIP" >> $GITHUB_OUTPUT
         echo "BRANCH_ABBR=$BRANCH_ABBR" >> $GITHUB_OUTPUT
         echo "CONFIG_TYPE=$CONFIG_TYPE" >> $GITHUB_OUTPUT
@@ -333,7 +299,6 @@ jobs:
         echo "BRANCH_WORK_DIR=$BRANCH_WORK_DIR" >> $GITHUB_OUTPUT
         echo "CONFIG_FILE=$CONFIG_FILE" >> $GITHUB_OUTPUT
         
-        # 设置环境变量
         echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
         echo "HASH=$(git log -1 --pretty=format:'%h' 2>/dev/null || echo 'unknown')" >> $GITHUB_ENV
 
@@ -350,17 +315,12 @@ jobs:
       id: prepare_env
       run: |
         set -euxo pipefail
-        
-        # 创建设备特定的目录（符号链接到基础构建目录）
         mkdir -p "${{ env.BASE_WORK_DIR }}/${{ matrix.device }}"
         
-        # 创建符号链接到基础构建目录
         ln -sf "${{ steps.setup_vars.outputs.BRANCH_WORK_DIR }}" "${{ env.BASE_WORK_DIR }}/${{ matrix.device }}/source"
         
-        # 设置工作目录
         OPENWRT_PATH="${{ env.BASE_WORK_DIR }}/${{ matrix.device }}/source"
         
-        # 输出变量
         echo "OPENWRT_PATH=$OPENWRT_PATH" >> $GITHUB_OUTPUT
 
     - name: Apply Configuration(应用配置)
@@ -368,16 +328,14 @@ jobs:
         set -euxo pipefail
         cd "${{ steps.prepare_env.outputs.OPENWRT_PATH }}"
         
-        # 合并配置文件
-        cat ${{ env.GENERAL_CONFIG }} ${{ env.BASE_CONFIG }} ${{ steps.setup_vars.outputs.CONFIG_FILE }} > .config
+        # 修复的配置文件合并语法
+        cat "${{ env.GENERAL_CONFIG }}" "${{ env.BASE_CONFIG }}" "${{ steps.setup_vars.outputs.CONFIG_FILE }}" > .config
+        
         if [ "${{ steps.setup_vars.outputs.BRANCH_ABBR }}" = "libwrt" ]; then
-          cat ${{ env.LIBWRT_CONFIG }} >> .config
+          cat "${{ env.LIBWRT_CONFIG }}" >> .config
         fi
         
-        # 生成配置
         make defconfig > /dev/null 2>&1
-        
-        # 安装配置指定的软件包
         make package/install
 
     - name: Generate Firmware(生成固件)
@@ -386,7 +344,6 @@ jobs:
         set -euxo pipefail
         cd "${{ steps.prepare_env.outputs.OPENWRT_PATH }}"
         
-        # 记录构建日志
         if ! make ${{ env.PARALLEL_COMPILE }} image 2>&1 | tee build.log; then
             echo "Image build failed, trying single thread..."
             if ! make ${{ env.SINGLE_THREAD }} image 2>&1 | tee -a build.log; then
@@ -397,10 +354,7 @@ jobs:
             fi
         fi
         
-        # 提取错误和警告日志
         grep -i 'error\|warning' build.log > error_warning.log || true
-        
-        # 提取编译的luci包列表
         grep -o 'luci-[^ ]*' build.log | sort -u > luci_packages_list.txt || true
         
         echo "status=success" >> $GITHUB_OUTPUT
@@ -413,7 +367,6 @@ jobs:
       if: steps.compile.outputs.status == 'success'
       run: |
         set -euxo pipefail
-        # 确保目标目录存在
         BIN_DIR="${{ steps.prepare_env.outputs.OPENWRT_PATH }}/bin/targets/*/*"
         if [ ! -d "$BIN_DIR" ]; then
           echo "Error: Bin directory not found"
@@ -421,32 +374,25 @@ jobs:
         fi
         cd "$BIN_DIR"
         
-        # 创建设备特定的输出目录
         DEVICE_OUTPUT_DIR="${{ env.SHARED_ARTIFACTS_DIR }}/${{ matrix.device }}"
         mkdir -p "$DEVICE_OUTPUT_DIR"
         
-        # 复制配置文件
         cp "${{ steps.prepare_env.outputs.OPENWRT_PATH }}/.config" "$DEVICE_OUTPUT_DIR/${{ steps.setup_vars.outputs.DEVICE_PREFIX }}.config" || echo "Warning: .config copy failed"
         
-        # 复制构建信息文件
         if [ -f "config.buildinfo" ]; then
           cp config.buildinfo "$DEVICE_OUTPUT_DIR/${{ steps.setup_vars.outputs.DEVICE_PREFIX }}.config.buildinfo"
         fi
         
-        # 复制manifest文件
         if ls *.manifest 1> /dev/null 2>&1; then
           cp *.manifest "$DEVICE_OUTPUT_DIR/${{ steps.setup_vars.outputs.DEVICE_PREFIX }}.manifest"
         fi
         
-        # 重命名固件文件
         for file in *.bin; do
           [ -f "$file" ] || continue
           [[ "$file" =~ factory|sysupgrade ]] || continue
           
-          # 提取固件模式
           MODE=$(echo "$file" | grep -oE "factory|sysupgrade")
           
-          # 使用已定义的变量
           CHIP="${{ steps.setup_vars.outputs.CHIP }}"
           if [[ "$file" =~ ${CHIP}-(.+)-squashfs ]]; then
             MODEL="${BASH_REMATCH[1]}"
@@ -455,28 +401,22 @@ jobs:
             echo "Warning: Could not determine model from filename: $file"
           fi
           
-          # 使用已定义的变量
           BRANCH_ABBR="${{ steps.setup_vars.outputs.BRANCH_ABBR }}"
           CONFIG_TYPE="${{ steps.setup_vars.outputs.CONFIG_TYPE }}"
           
-          # 新文件名格式: 分支缩写-设备型号-固件模式-配置.bin
           NEW_NAME="${BRANCH_ABBR}-${MODEL}-${MODE}-${CONFIG_TYPE}.bin"
           cp "$file" "$DEVICE_OUTPUT_DIR/$NEW_NAME"
           echo "Renamed: $file -> $NEW_NAME"
         done
         
-        # 收集软件包文件到共享目录（不打包）
         PKG_DIR="${{ steps.prepare_env.outputs.OPENWRT_PATH }}/bin/packages"
         if [ -d "$PKG_DIR" ]; then
-          # 创建共享的软件包收集目录
           mkdir -p "${{ env.SHARED_ARTIFACTS_DIR }}/all_packages"
-          # 复制所有软件包文件到共享目录
           find "$PKG_DIR" -name "*.ipk" -o -name "*.apk" | while read -r pkg; do
             cp "$pkg" "${{ env.SHARED_ARTIFACTS_DIR }}/all_packages/"
           done
         fi
         
-        # 收集日志文件到共享目录（不打包）
         mkdir -p "${{ env.SHARED_ARTIFACTS_DIR }}/all_logs"
         LOG_FILES=(
           "${{ steps.prepare_env.outputs.OPENWRT_PATH }}/build.log"
@@ -485,7 +425,6 @@ jobs:
         )
         for log_file in "${LOG_FILES[@]}"; do
           if [ -f "$log_file" ]; then
-            # 使用设备名称前缀避免文件名冲突
             log_name=$(basename "$log_file")
             cp "$log_file" "${{ env.SHARED_ARTIFACTS_DIR }}/all_logs/${{ matrix.device }}_${log_name}"
           fi
@@ -495,7 +434,6 @@ jobs:
       if: always()
       run: |
         set -euxo pipefail
-        # 清理符号链接
         rm -rf "${{ env.BASE_WORK_DIR }}/${{ matrix.device }}"
 
     - name: Build Status Report(构建状态报告)
@@ -513,11 +451,10 @@ jobs:
         
         echo "| ${{ matrix.device }} | $status |" >> $GITHUB_STEP_SUMMARY
 
-  # 合并和打包作业 - 在所有设备构建完成后执行
   Package_Artifacts:
     runs-on: ubuntu-22.04
     needs: [Base_Build, Config_Build]
-    if: always()  # 即使部分构建失败也执行
+    if: always()
     steps:
     - name: Checkout(检出代码)
       uses: actions/checkout@main
@@ -535,14 +472,12 @@ jobs:
         
         cd "$PKG_DIR"
         
-        # 使用更高效的去重方法：先按大小和修改时间去重，再计算md5
         find . -name "*.ipk" -o -name "*.apk" | while read -r file; do
           size=$(stat -c%s "$file")
           mtime=$(stat -c%Y "$file")
           echo "$size $mtime $file"
         done | sort -u | cut -d' ' -f3- > potential_unique_files.txt
         
-        # 对潜在唯一文件计算md5进行最终去重
         > checksums.txt
         > unique_files.txt
         
@@ -555,20 +490,16 @@ jobs:
           fi
         done < potential_unique_files.txt
         
-        # 创建去重后的目录
         DEDUP_DIR="${{ env.SHARED_ARTIFACTS_DIR }}/dedup_packages"
         mkdir -p "$DEDUP_DIR"
         
-        # 复制去重后的文件
         while read -r file; do
           cp "$file" "$DEDUP_DIR/"
         done < unique_files.txt
         
-        # 生成软件包列表
         cd "$DEDUP_DIR"
         find . -name "*.ipk" -o -name "*.apk" | sed 's|^\./||' | sort > "${{ env.SHARED_ARTIFACTS_DIR }}/packages_list.txt"
         
-        # 打包去重后的软件包
         cd "${{ env.SHARED_ARTIFACTS_DIR }}"
         tar -czf "packages-all.tar.gz" -C dedup_packages .
         
@@ -584,7 +515,6 @@ jobs:
           exit 0
         fi
         
-        # 打包所有日志文件
         cd "${{ env.SHARED_ARTIFACTS_DIR }}"
         tar -czf "logs-all.tar.gz" -C all_logs .
         
@@ -593,7 +523,6 @@ jobs:
     - name: Generate Release Info(生成Release信息)
       run: |
         set -euxo pipefail
-        # 生成总的Release信息
         cat > "${{ env.SHARED_ARTIFACTS_DIR }}/release_info.md" << EOF
 # IPQ60XX 固件构建信息
 
@@ -603,10 +532,8 @@ $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 ## 构建设备
 EOF
 
-        # 添加每个设备的信息
         for device_dir in ${{ env.SHARED_ARTIFACTS_DIR }}/*/; do
           device_name=$(basename "$device_dir")
-          # 跳过非设备目录
           if [[ "$device_name" == all_* ]] || [[ "$device_name" == dedup_* ]]; then
             continue
           fi
@@ -614,7 +541,6 @@ EOF
           echo "" >> "${{ env.SHARED_ARTIFACTS_DIR }}/release_info.md"
           echo "### $device_name" >> "${{ env.SHARED_ARTIFACTS_DIR }}/release_info.md"
           
-          # 查找固件文件
           if ls "$device_dir"/*.bin 1> /dev/null 2>&1; then
             echo "**固件文件**:" >> "${{ env.SHARED_ARTIFACTS_DIR }}/release_info.md"
             for bin_file in "$device_dir"/*.bin; do
@@ -624,14 +550,12 @@ EOF
             echo "**固件文件**: 构建失败" >> "${{ env.SHARED_ARTIFACTS_DIR }}/release_info.md"
           fi
           
-          # 查找配置文件
           if [ -f "$device_dir"/*.config ]; then
             echo "**配置文件**:" >> "${{ env.SHARED_ARTIFACTS_DIR }}/release_info.md"
             echo "- $(ls "$device_dir"/*.config | xargs -n1 basename)" >> "${{ env.SHARED_ARTIFACTS_DIR }}/release_info.md"
           fi
         done
         
-        # 添加软件包列表
         echo "" >> "${{ env.SHARED_ARTIFACTS_DIR }}/release_info.md"
         echo "## 软件包列表" >> "${{ env.SHARED_ARTIFACTS_DIR }}/release_info.md"
         echo '```' >> "${{ env.SHARED_ARTIFACTS_DIR }}/release_info.md"

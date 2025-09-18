@@ -388,7 +388,6 @@ jobs:
         
         for file in *.bin; do
           [ -f "$file" ] || continue
-          # 修复：使用简单的字符串匹配替代正则表达式
           if [[ "$file" == *"factory"* ]] || [[ "$file" == *"sysupgrade"* ]]; then
             if [[ "$file" == *"factory"* ]]; then
               MODE="factory"

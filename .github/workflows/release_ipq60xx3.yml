@@ -331,6 +331,7 @@ jobs:
         echo "REPO_BRANCH=$REPO_BRANCH" >> $GITHUB_OUTPUT
         echo "DEVICE_PREFIX=$DEVICE_PREFIX" >> $GITHUB_OUTPUT
         echo "BRANCH_WORK_DIR=$BRANCH_WORK_DIR" >> $GITHUB_OUTPUT
+        echo "CONFIG_FILE=$CONFIG_FILE" >> $GITHUB_OUTPUT
         
         # 设置环境变量
         echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
@@ -368,7 +369,7 @@ jobs:
         cd "${{ steps.prepare_env.outputs.OPENWRT_PATH }}"
         
         # 合并配置文件
-        cat ${{ env.GENERAL_CONFIG }} ${{ env.BASE_CONFIG }} ${{ env.CONFIG_MAP }} | grep "^${{ steps.setup_vars.outputs.CONFIG_TYPE }}|" | cut -d'|' -f2 > .config
+        cat ${{ env.GENERAL_CONFIG }} ${{ env.BASE_CONFIG }} ${{ steps.setup_vars.outputs.CONFIG_FILE }} > .config
         if [ "${{ steps.setup_vars.outputs.BRANCH_ABBR }}" = "libwrt" ]; then
           cat ${{ env.LIBWRT_CONFIG }} >> .config
         fi

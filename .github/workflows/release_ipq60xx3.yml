@@ -388,27 +388,29 @@ jobs:
         
         for file in *.bin; do
           [ -f "$file" ] || continue
-          # 修复第529行的问题：使用case语句替代正则表达式
-          case "$file" in
-            *factory*|*sysupgrade*)
-              MODE=$(echo "$file" | grep -oE "factory|sysupgrade")
-              
-              CHIP="${{ steps.setup_vars.outputs.CHIP }}"
-              if [[ "$file" =~ ${CHIP}-(.+)-squashfs ]]; then
-                MODEL="${BASH_REMATCH[1]}"
-              else
-                MODEL="unknown-model"
-                echo "Warning: Could not determine model from filename: $file"
-              fi
-              
-              BRANCH_ABBR="${{ steps.setup_vars.outputs.BRANCH_ABBR }}"
-              CONFIG_TYPE="${{ steps.setup_vars.outputs.CONFIG_TYPE }}"
-              
-              NEW_NAME="${BRANCH_ABBR}-${MODEL}-${MODE}-${CONFIG_TYPE}.bin"
-              cp "$file" "$DEVICE_OUTPUT_DIR/$NEW_NAME"
-              echo "Renamed: $file -> $NEW_NAME"
-              ;;
-          esac
+          # 修复：使用简单的字符串匹配替代正则表达式
+          if [[ "$file" == *"factory"* ]] || [[ "$file" == *"sysupgrade"* ]]; then
+            if [[ "$file" == *"factory"* ]]; then
+              MODE="factory"
+            else
+              MODE="sysupgrade"
+            fi
+            
+            CHIP="${{ steps.setup_vars.outputs.CHIP }}"
+            if [[ "$file" =~ ${CHIP}-(.+)-squashfs ]]; then
+              MODEL="${BASH_REMATCH[1]}"
+            else
+              MODEL="unknown-model"
+              echo "Warning: Could not determine model from filename: $file"
+            fi
+            
+            BRANCH_ABBR="${{ steps.setup_vars.outputs.BRANCH_ABBR }}"
+            CONFIG_TYPE="${{ steps.setup_vars.outputs.CONFIG_TYPE }}"
+            
+            NEW_NAME="${BRANCH_ABBR}-${MODEL}-${MODE}-${CONFIG_TYPE}.bin"
+            cp "$file" "$DEVICE_OUTPUT_DIR/$NEW_NAME"
+            echo "Renamed: $file -> $NEW_NAME"
+          fi
         done
         
         PKG_DIR="${{ steps.prepare_env.outputs.OPENWRT_PATH }}/bin/packages"

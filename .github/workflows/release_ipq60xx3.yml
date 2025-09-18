@@ -20,8 +20,8 @@ env:
   BASE_CONFIG: "deconfig/IPQ60XX.config"
   LIBWRT_CONFIG: "deconfig/Libwrt.config"
   DIY_SCRIPT: "scripts/script.sh"
-  SHARED_LOGS_DIR: ${{ github.workspace }}/logs
-  SHARED_ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+  SHARED_LOGS_DIR: "${{ github.workspace }}/logs"
+  SHARED_ARTIFACTS_DIR: "${{ github.workspace }}/artifacts"
   BASE_WORK_DIR: "${{ github.workspace }}/openwrt_build"
   PARALLEL_COMPILE: "-j$(nproc)"
   SINGLE_THREAD: "-j1"
@@ -59,9 +59,9 @@ jobs:
         sudo -E systemctl daemon-reload
         sudo timedatectl set-timezone "$TZ"
         
-        mkdir -p ${{ env.SHARED_LOGS_DIR }}
-        mkdir -p ${{ env.SHARED_ARTIFACTS_DIR }}
-        mkdir -p ${{ env.BASE_WORK_DIR }}
+        mkdir -p "${{ env.SHARED_LOGS_DIR }}"
+        mkdir -p "${{ env.SHARED_ARTIFACTS_DIR }}"
+        mkdir -p "${{ env.BASE_WORK_DIR }}"
 
     - name: Check Server Performance(检查服务器性能)
       run: |
@@ -70,7 +70,7 @@ jobs:
         echo -e "已知CPU型号（降序）：7763，8370C，8272CL，8171M，E5-2673"
         echo "--------------------------CPU信息--------------------------"
         echo "CPU物理数量：$(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
-        echo -e "CPU核心信息：$(cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c)"
+        echo -e "CPU核心信息：$(cat /proc/cpuinfo | grep "name" | cut -f2 -d: | uniq -c)"
         echo "--------------------------内存信息--------------------------"
         echo "已安装内存详细信息："
         echo -e "$(sudo lshw -short -C memory | grep GiB)"
@@ -120,7 +120,7 @@ jobs:
       id: clone
       run: |
         set -euxo pipefail
-        df -hT $GITHUB_WORKSPACE
+        df -hT "${{ github.workspace }}"
         
         mkdir -p "${{ steps.setup_vars.outputs.BRANCH_WORK_DIR }}"
         
@@ -142,9 +142,9 @@ jobs:
         
         echo "OPENWRT_PATH=$OPENWRT_PATH" >> $GITHUB_OUTPUT
         
-        cat ${{ env.GENERAL_CONFIG }} ${{ env.BASE_CONFIG }} > "$OPENWRT_PATH/.config"
+        cat "${{ env.GENERAL_CONFIG }}" "${{ env.BASE_CONFIG }}" > "$OPENWRT_PATH/.config"
         if [ "${{ matrix.branch }}" = "libwrt" ]; then
-          cat ${{ env.LIBWRT_CONFIG }} >> "$OPENWRT_PATH/.config"
+          cat "${{ env.LIBWRT_CONFIG }}" >> "$OPENWRT_PATH/.config"
         fi
         cd "$OPENWRT_PATH"
         make defconfig > /dev/null 2>&1
@@ -191,9 +191,9 @@ jobs:
     - name: Load Custom Configuration(加载自定义配置)
       run: |
         set -euxo pipefail
-        chmod +x ${{ env.DIY_SCRIPT }}
+        chmod +x "${{ env.DIY_SCRIPT }}"
         cd "${{ steps.clone.outputs.OPENWRT_PATH }}"
-        $GITHUB_WORKSPACE/${{ env.DIY_SCRIPT }}
+        "${{ github.workspace }}/${{ env.DIY_SCRIPT }}"
 
     - name: Download DL Package(下载DL软件包)
       run: |
@@ -328,7 +328,6 @@ jobs:
         set -euxo pipefail
         cd "${{ steps.prepare_env.outputs.OPENWRT_PATH }}"
         
-        # 修复的配置文件合并语法
         cat "${{ env.GENERAL_CONFIG }}" "${{ env.BASE_CONFIG }}" "${{ steps.setup_vars.outputs.CONFIG_FILE }}" > .config
         
         if [ "${{ steps.setup_vars.outputs.BRANCH_ABBR }}" = "libwrt" ]; then
@@ -389,24 +388,24 @@ jobs:
         
         for file in *.bin; do
           [ -f "$file" ] || continue
-          [[ "$file" =~ factory|sysupgrade ]] || continue
-          
-          MODE=$(echo "$file" | grep -oE "factory|sysupgrade")
-          
-          CHIP="${{ steps.setup_vars.outputs.CHIP }}"
-          if [[ "$file" =~ ${CHIP}-(.+)-squashfs ]]; then
-            MODEL="${BASH_REMATCH[1]}"
-          else
-            MODEL="unknown-model"
-            echo "Warning: Could not determine model from filename: $file"
+          if [[ "$file" =~ factory|sysupgrade ]]; then
+            MODE=$(echo "$file" | grep -oE "factory|sysupgrade")
+            
+            CHIP="${{ steps.setup_vars.outputs.CHIP }}"
+            if [[ "$file" =~ ${CHIP}-(.+)-squashfs ]]; then
+              MODEL="${BASH_REMATCH[1]}"
+            else
+              MODEL="unknown-model"
+              echo "Warning: Could not determine model from filename: $file"
+            fi
+            
+            BRANCH_ABBR="${{ steps.setup_vars.outputs.BRANCH_ABBR }}"
+            CONFIG_TYPE="${{ steps.setup_vars.outputs.CONFIG_TYPE }}"
+            
+            NEW_NAME="${BRANCH_ABBR}-${MODEL}-${MODE}-${CONFIG_TYPE}.bin"
+            cp "$file" "$DEVICE_OUTPUT_DIR/$NEW_NAME"
+            echo "Renamed: $file -> $NEW_NAME"
           fi
-          
-          BRANCH_ABBR="${{ steps.setup_vars.outputs.BRANCH_ABBR }}"
-          CONFIG_TYPE="${{ steps.setup_vars.outputs.CONFIG_TYPE }}"
-          
-          NEW_NAME="${BRANCH_ABBR}-${MODEL}-${MODE}-${CONFIG_TYPE}.bin"
-          cp "$file" "$DEVICE_OUTPUT_DIR/$NEW_NAME"
-          echo "Renamed: $file -> $NEW_NAME"
         done
         
         PKG_DIR="${{ steps.prepare_env.outputs.OPENWRT_PATH }}/bin/packages"
@@ -532,7 +531,7 @@ $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 ## 构建设备
 EOF
 
-        for device_dir in ${{ env.SHARED_ARTIFACTS_DIR }}/*/; do
+        for device_dir in "${{ env.SHARED_ARTIFACTS_DIR }}"/*/; do
           device_name=$(basename "$device_dir")
           if [[ "$device_name" == all_* ]] || [[ "$device_name" == dedup_* ]]; then
             continue
